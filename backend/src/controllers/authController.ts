@@ -1,24 +1,17 @@
 import { Request, Response } from "express";
 import cache from "../utils/cache";
 import { base64ToArrayBuffer } from "../utils/utils";
-import crypto, { randomBytes } from "crypto";
+import { randomBytes } from "crypto";
 const { subtle } = require("crypto").webcrypto;
 
-import { Buffer } from "buffer";
-
-// Function to retrieve the stored value if needed
-export const getStoredValue = (key: string): string | undefined => {
-  return cache.get(key);
-};
-
-export const getCreds = (req: Request, res: Response) => {
+export const getCredentials = (req: Request, res: Response) => {
   const credentialId = cache.get("credentialId");
-  const challenge = randomBytes(32).toString("base64url");
+  const challenge = randomBytes(32).toString("base64");
   cache.set("challenge", challenge);
   res.json({ credentialId, challenge });
 };
 
-export const setCreds = (req: Request, res: Response) => {
+export const setCredentials = (req: Request, res: Response) => {
   const { credentialId, publicKey } = req.body;
   cache.set("credentialId", credentialId);
   cache.set("publicKey", publicKey);
@@ -34,56 +27,32 @@ export async function verifySignature(req: Request, res: Response) {
       return res.status(400).json({ error: "Public key not found" });
     }
 
-    // Convert the public key from base64 to ArrayBuffer
     const publicKeyBuffer = base64ToArrayBuffer(publicKey);
+    const publicKeyObj = await importPublicKey(publicKeyBuffer);
 
-    // Import the public key with correct parameters
-    const publicKeyObj = await subtle.importKey(
-      "spki",
-      publicKeyBuffer,
-      {
-        name: "RSASSA-PKCS1-v1_5",
-        hash: { name: "SHA-256" },
-      },
-      false,
-      ["verify"]
-    );
-
-    // Decode and hash clientDataJSON
     const clientDataBuffer = base64ToArrayBuffer(clientDataJSON);
     const clientDataHash = await subtle.digest("SHA-256", clientDataBuffer);
-
-    // Decode authenticatorData
     const authDataBuffer = base64ToArrayBuffer(authenticatorData);
 
-    // Concatenate authenticatorData and clientDataHash
-    const signatureBase = new Uint8Array(
-      authDataBuffer.byteLength + clientDataHash.byteLength
-    );
-    signatureBase.set(new Uint8Array(authDataBuffer), 0);
-    signatureBase.set(
-      new Uint8Array(clientDataHash),
-      authDataBuffer.byteLength
-    );
-
-    // Decode signature
+    const signatureBase = createSignatureBase(authDataBuffer, clientDataHash);
     const signatureBuffer = base64ToArrayBuffer(signature);
 
-    // Verify the signature
-    const isValid = await subtle.verify(
-      { name: "RSASSA-PKCS1-v1_5" },
+    const isValid = await verifySignatureWithPublicKey(
       publicKeyObj,
       signatureBuffer,
       signatureBase
     );
 
     if (isValid) {
-      // Verify the challenge
-      const challenge = cache.get("challenge");
-      const parsedClientData = JSON.parse(
-        Buffer.from(clientDataBuffer).toString()
+      const challenge = cache.get<string>("challenge");
+      if (!challenge) {
+        return res.status(400).json({ error: "Challenge not found" });
+      }
+      const isValidChallenge = await validateChallenge(
+        challenge,
+        clientDataBuffer
       );
-      if (parsedClientData.challenge !== challenge) {
+      if (!isValidChallenge) {
         return res.status(401).json({ error: "Invalid challenge" });
       }
       res.json({ isValid });
@@ -95,3 +64,64 @@ export async function verifySignature(req: Request, res: Response) {
     res.status(500).json({ error: "Internal server error" });
   }
 }
+
+async function importPublicKey(publicKeyBuffer: ArrayBuffer) {
+  return await subtle.importKey(
+    "spki",
+    publicKeyBuffer,
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      hash: { name: "SHA-256" },
+    },
+    false,
+    ["verify"]
+  );
+}
+
+function createSignatureBase(
+  authDataBuffer: ArrayBuffer,
+  clientDataHash: ArrayBuffer
+) {
+  const signatureBase = new Uint8Array(
+    authDataBuffer.byteLength + clientDataHash.byteLength
+  );
+  signatureBase.set(new Uint8Array(authDataBuffer), 0);
+  signatureBase.set(new Uint8Array(clientDataHash), authDataBuffer.byteLength);
+  return signatureBase;
+}
+
+async function verifySignatureWithPublicKey(
+  publicKeyObj: CryptoKey,
+  signatureBuffer: ArrayBuffer,
+  signatureBase: Uint8Array
+) {
+  return await subtle.verify(
+    { name: "RSASSA-PKCS1-v1_5" },
+    publicKeyObj,
+    signatureBuffer,
+    signatureBase
+  );
+}
+
+async function validateChallenge(
+  challenge: string,
+  clientDataBuffer: ArrayBuffer
+) {
+  const parsedClientData = JSON.parse(Buffer.from(clientDataBuffer).toString());
+  return compareBase64Strings(parsedClientData.challenge, challenge!);
+}
+const base64ToStandard = (str: string) => {
+  // Convert URL-safe Base64 to standard Base64
+  return str.replace(/_/g, "/").replace(/-/g, "+");
+};
+
+const decodeBase64 = (str: string) => {
+  // Decode Base64 string
+  return Buffer.from(str, "base64").toString("utf-8");
+};
+
+const compareBase64Strings = (str1: string, str2: string) => {
+  const decodedStr1 = decodeBase64(base64ToStandard(str1));
+  const decodedStr2 = decodeBase64(base64ToStandard(str2));
+  return decodedStr1 === decodedStr2;
+};

@@ -2,17 +2,12 @@ import React, { useState } from "react";
 import { arrayBufferToBase64, base64ToArrayBuffer } from "./util/util";
 
 function App() {
-  const [credential, setCredential] = useState<PublicKeyCredential | null>(
-    null
-  );
-  const [challenge, setChallenge] = useState<Uint8Array>();
   const [status, setStatus] = useState<string>("");
 
-  async function handleCreateCreds() {
-    setStatus("Creating credentials...");
-    console.time("createCredentials");
+  async function handleCreateCredential() {
+    setStatus("Creating credential...");
     const challenge = window.crypto.getRandomValues(new Uint8Array(32));
-    const publicKey: PublicKeyCredentialCreationOptions = {
+    const publicKeyOptions: PublicKeyCredentialCreationOptions = {
       challenge,
       rp: { name: "Your App" },
       user: {
@@ -32,12 +27,10 @@ function App() {
     };
 
     try {
-      console.time("navigatorCredentialsCreate");
       const credential = (await navigator.credentials.create({
-        publicKey: publicKey,
+        publicKey: publicKeyOptions,
       })) as PublicKeyCredential;
-      console.timeEnd("navigatorCredentialsCreate");
-      setCredential(credential);
+
       const encodedCredentialId = arrayBufferToBase64(credential.rawId);
       const encodedPublicKey = arrayBufferToBase64(
         (
@@ -45,104 +38,91 @@ function App() {
         ).getPublicKey()!
       );
 
-      try {
-        console.time("sendCredentialToBackend");
-        const response = await fetch("http://localhost:3002/auth/set-creds", {
+      const response = await fetch(
+        "http://localhost:3002/auth/set-credentials",
+        {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             credentialId: encodedCredentialId,
             publicKey: encodedPublicKey,
           }),
-        });
-        console.timeEnd("sendCredentialToBackend");
-
-        if (response.ok) {
-          setStatus("Credential data sent to backend successfully");
-        } else {
-          setStatus("Failed to send credential data to backend");
         }
-      } catch (error) {
-        setStatus(`Error sending credential data to backend: ${error}`);
-      }
+      );
+
+      setStatus(
+        response.ok
+          ? "Credential data sent to backend successfully"
+          : "Failed to send credential data to backend"
+      );
     } catch (error) {
       setStatus(`Error creating credential: ${error}`);
     }
-    console.timeEnd("createCredentials");
   }
 
-  const handleGetCreds = async () => {
-    console.time("getCredentials");
+  async function handleGetCredential() {
     try {
-      console.time("fetchCredentials");
-      const response = await fetch("http://localhost:3002/auth/get-creds", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
+      const response = await fetch(
+        "http://localhost:3002/auth/get-credentials",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        }
+      );
       const { credentialId, challenge } = await response.json();
-      console.timeEnd("fetchCredentials");
 
-      const publicKey: PublicKeyCredentialRequestOptions = {
+      const publicKeyOptions: PublicKeyCredentialRequestOptions = {
         challenge: base64ToArrayBuffer(challenge),
         allowCredentials: [
           {
-            id: base64ToArrayBuffer(credentialId), // Remove the '1231' suffix
+            id: base64ToArrayBuffer(credentialId),
             type: "public-key",
           },
         ],
         userVerification: "preferred",
       };
 
-      console.time("navigatorCredentialsGet");
-      const assertion = (await navigator.credentials.get({ publicKey })) as any;
-      console.timeEnd("navigatorCredentialsGet");
-      if (!assertion) {
-        throw new Error("Failed to get credentials");
-      }
+      const assertion = (await navigator.credentials.get({
+        publicKey: publicKeyOptions,
+      })) as PublicKeyCredential;
 
-      console.time("verifySignature");
-      const respons = await fetch(
+      const verificationResponse = await fetch(
         "http://localhost:3002/auth/verify-signature",
         {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             clientDataJSON: arrayBufferToBase64(
               assertion.response.clientDataJSON
             ),
             authenticatorData: arrayBufferToBase64(
-              assertion.response.authenticatorData
+              (assertion.response as AuthenticatorAssertionResponse)
+                .authenticatorData
             ),
-            signature: arrayBufferToBase64(assertion.response.signature),
+            signature: arrayBufferToBase64(
+              (assertion.response as AuthenticatorAssertionResponse).signature
+            ),
           }),
         }
       );
-      console.timeEnd("verifySignature");
 
-      if (respons) {
-        setStatus("Signature verified successfully");
-      } else {
-        setStatus("Failed to verify signature");
-      }
+      setStatus(
+        verificationResponse.ok
+          ? "Signature verified successfully"
+          : "Failed to verify signature"
+      );
     } catch (error: any) {
       setStatus(`Error: ${error.message}`);
     }
-    console.timeEnd("getCredentials");
-  };
+  }
 
   return (
     <div className="App">
       <br />
-      <button onClick={handleCreateCreds}> create Creds</button>
+      <button onClick={handleCreateCredential}>Create Credential</button>
       <br />
       <br />
-      <button onClick={handleGetCreds}> get Creds</button>
+      <button onClick={handleGetCredential}>Get Credential</button>
       <br />
       <p>{status}</p>
     </div>
