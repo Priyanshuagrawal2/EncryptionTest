@@ -42,7 +42,8 @@ export async function verifySignature(req: Request, res: Response) {
     const isValid = await verifySignatureWithPublicKey(
       publicKeyObj,
       signatureBuffer,
-      signatureBase
+      signatureBase,
+      algorithm
     );
 
     if (isValid) {
@@ -110,10 +111,18 @@ function createSignatureBase(
 async function verifySignatureWithPublicKey(
   publicKeyObj: CryptoKey,
   signatureBuffer: ArrayBuffer,
-  signatureBase: Uint8Array
+  signatureBase: Uint8Array,
+  alg: number
 ) {
+  let algorithm = {};
+  if (alg === -257) {
+    algorithm = { name: "RSASSA-PKCS1-v1_5" };
+  } else if (alg === -7) {
+    algorithm = { name: "ECDSA", hash: { name: "SHA-256" } };
+  }
+
   return await subtle.verify(
-    { name: "RSASSA-PKCS1-v1_5" },
+    algorithm,
     publicKeyObj,
     signatureBuffer,
     signatureBase
