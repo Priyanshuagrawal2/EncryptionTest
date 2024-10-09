@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { arrayBufferToBase64, base64ToArrayBuffer } from "./util/util";
+
 function App() {
   const [status, setStatus] = useState<string>("");
 
@@ -22,13 +23,14 @@ function App() {
         userVerification: "preferred",
       },
       attestation: "direct",
+      timeout: 60000,
     };
 
     try {
       const credential = (await navigator.credentials.create({
         publicKey: publicKeyOptions,
       })) as any;
-      console.log(credential.toJSON());
+      const credentialJSON = credential.toJSON();
       const encodedCredentialId = arrayBufferToBase64(credential.rawId);
       const encodedPublicKey = arrayBufferToBase64(
         (
@@ -44,6 +46,7 @@ function App() {
           body: JSON.stringify({
             credentialId: encodedCredentialId,
             publicKey: encodedPublicKey,
+            algorithm: credentialJSON.response.publicKeyAlgorithm,
           }),
         }
       );

@@ -12,9 +12,10 @@ export const getCredentials = (req: Request, res: Response) => {
 };
 
 export const setCredentials = (req: Request, res: Response) => {
-  const { credentialId, publicKey } = req.body;
+  const { credentialId, publicKey, algorithm } = req.body;
   cache.set("credentialId", credentialId);
   cache.set("publicKey", publicKey);
+  cache.set("algorithm", algorithm);
   res.json({ success: true });
 };
 
@@ -23,12 +24,13 @@ export async function verifySignature(req: Request, res: Response) {
     const { clientDataJSON, authenticatorData, signature } = req.body;
 
     const publicKey = cache.get<string>("publicKey");
-    if (!publicKey) {
+    const algorithm = cache.get<number>("algorithm");
+    if (!publicKey || !algorithm) {
       return res.status(400).json({ error: "Public key not found" });
     }
 
     const publicKeyBuffer = base64ToArrayBuffer(publicKey);
-    const publicKeyObj = await importPublicKey(publicKeyBuffer);
+    const publicKeyObj = await importPublicKey(publicKeyBuffer, algorithm);
 
     const clientDataBuffer = base64ToArrayBuffer(clientDataJSON);
     const clientDataHash = await subtle.digest("SHA-256", clientDataBuffer);
@@ -65,17 +67,32 @@ export async function verifySignature(req: Request, res: Response) {
   }
 }
 
-async function importPublicKey(publicKeyBuffer: ArrayBuffer) {
-  return await subtle.importKey(
-    "spki",
-    publicKeyBuffer,
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      hash: { name: "SHA-256" },
-    },
-    false,
-    ["verify"]
-  );
+async function importPublicKey(publicKeyBuffer: ArrayBuffer, alg: number) {
+  if (alg === -257) {
+    return await subtle.importKey(
+      "spki",
+      publicKeyBuffer,
+      {
+        name: "RSASSA-PKCS1-v1_5",
+        hash: { name: "SHA-256" },
+      },
+      false,
+      ["verify"]
+    );
+  } else if (alg === -7) {
+    return await subtle.importKey(
+      "spki",
+      publicKeyBuffer,
+      {
+        name: "ECDSA",
+        namedCurve: "P-256",
+      },
+      false,
+      ["verify"]
+    );
+  } else {
+    throw new Error(`Unsupported algorithm: ${alg}`);
+  }
 }
 
 function createSignatureBase(
