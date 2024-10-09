@@ -1,6 +1,5 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { arrayBufferToBase64, base64ToArrayBuffer } from "./util/util";
-
 function App() {
   const [status, setStatus] = useState<string>("");
 
@@ -21,7 +20,6 @@ function App() {
       ],
       authenticatorSelection: {
         userVerification: "preferred",
-        authenticatorAttachment: "platform",
       },
       attestation: "direct",
     };
@@ -29,8 +27,8 @@ function App() {
     try {
       const credential = (await navigator.credentials.create({
         publicKey: publicKeyOptions,
-      })) as PublicKeyCredential;
-
+      })) as any;
+      console.log(credential.toJSON());
       const encodedCredentialId = arrayBufferToBase64(credential.rawId);
       const encodedPublicKey = arrayBufferToBase64(
         (
@@ -70,6 +68,9 @@ function App() {
         }
       );
       const { credentialId, challenge } = await response.json();
+      if (!credentialId || !challenge) {
+        return handleCreateCredential();
+      }
 
       const publicKeyOptions: PublicKeyCredentialRequestOptions = {
         challenge: base64ToArrayBuffer(challenge),
@@ -77,6 +78,7 @@ function App() {
           {
             id: base64ToArrayBuffer(credentialId),
             type: "public-key",
+            transports: ["internal"],
           },
         ],
         userVerification: "preferred",
@@ -112,15 +114,13 @@ function App() {
           : "Failed to verify signature"
       );
     } catch (error: any) {
+      console.log(error);
       setStatus(`Error: ${error.message}`);
+      return handleCreateCredential();
     }
   }
-
   return (
     <div className="App">
-      <br />
-      <button onClick={handleCreateCredential}>Create Credential</button>
-      <br />
       <br />
       <button onClick={handleGetCredential}>Get Credential</button>
       <br />
@@ -128,5 +128,4 @@ function App() {
     </div>
   );
 }
-
 export default App;
