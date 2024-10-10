@@ -6,19 +6,27 @@ import * as asn1js from 'asn1js';
 const { subtle } = require("crypto").webcrypto;
 
 export const getCredentials = (req: Request, res: Response) => {
-  const credentialId = cache.get("credentialId");
-  const transports = cache.get("transports");
+  const {userId} = req.body
+  console.log(req.body)
+  const credentials = cache.get<UserCreds[]>(userId);
   const challenge = randomBytes(32).toString("base64");
   cache.set("challenge", challenge);
-  res.json({ credentialId, challenge, transports });
+  res.json({ credentials, challenge });
 };
 
+export type UserCreds = {
+  credentialId: string, publicKey: string, algorithm: string, transports: string
+}
+
 export const setCredentials = (req: Request, res: Response) => {
-  const { credentialId, publicKey, algorithm,transports } = req.body;
-  cache.set("credentialId", credentialId);
-  cache.set("publicKey", publicKey);
-  cache.set("algorithm", algorithm);
-  cache.set("transports", transports);
+  const { userId, creds } = req.body;
+  let existingCreds = cache.get<UserCreds[]>(userId)
+  if (existingCreds?.length) {
+    existingCreds.push(creds)
+  }else{
+    existingCreds = [creds]
+  }
+  cache.set(userId,existingCreds)
   res.json({ success: true });
 };
 
@@ -163,6 +171,7 @@ async function verifySignatureWithPublicKey(
     signatureBase
   );
 }
+
 async function validateChallenge(
   challenge: string,
   clientDataBuffer: ArrayBuffer

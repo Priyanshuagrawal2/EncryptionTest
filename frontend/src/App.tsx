@@ -1,5 +1,10 @@
-import { useState } from "react";
 import { arrayBufferToBase64, base64ToArrayBuffer } from "./util/util";
+import { useState } from "react";
+import axios from "axios"
+
+export type UserCreds = {
+  credentialId: string, publicKey: string, algorithm: string, transports: string
+}
 
 function App() {
   const [status, setStatus] = useState<string>("");
@@ -17,8 +22,8 @@ function App() {
         name: email,
         displayName: username,
       },
-  
-      
+
+
       pubKeyCredParams: [
         { alg: -7, type: "public-key" }, // ES256
         { alg: -257, type: "public-key" }, // RS256
@@ -49,10 +54,13 @@ function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            credentialId: encodedCredentialId,
-            publicKey: encodedPublicKey,
-            algorithm: credentialJSON.response.publicKeyAlgorithm,
-            transports: credentialJSON.response.transports
+            userId: email,
+            creds: {
+              credentialId: encodedCredentialId,
+              publicKey: encodedPublicKey,
+              algorithm: credentialJSON.response.publicKeyAlgorithm,
+              transports: credentialJSON.response.transports,
+            }
           }),
         }
       );
@@ -69,58 +77,63 @@ function App() {
 
   async function handleGetCredential() {
     try {
-      const response = await fetch(
+      const response = await axios.post<UserCreds[], string>(
         "http://localhost:3002/auth/get-credentials",
+
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+           userId: email 
         }
       );
-      const { credentialId, challenge, transports } = await response.json();
-      if (!credentialId || !challenge) {
+      const responseData = JSON.parse(response);
+      const { credentials, challenge } = responseData;
+      if (!credentials || !challenge) {
         return handleCreateCredential();
       }
-      const publicKeyOptions: PublicKeyCredentialRequestOptions = {
-        challenge: base64ToArrayBuffer(challenge),
-        allowCredentials: [
+      for (const credential of credentials) {
+        const publicKeyOptions: PublicKeyCredentialRequestOptions = {
+          challenge: base64ToArrayBuffer(challenge),
+          allowCredentials: [
+            {
+              id: base64ToArrayBuffer(credential.credentialId),
+              type: "public-key",
+              transports: credential.transports,
+            },
+          ],
+          userVerification: "preferred",
+        };
+        const assertion = (await navigator.credentials.get({
+          publicKey: publicKeyOptions,
+        })) as PublicKeyCredential;
+
+        const verificationResponse = await fetch(
+          "http://localhost:3002/auth/verify-signature",
           {
-            id: base64ToArrayBuffer(credentialId),
-            type: "public-key",
-            transports,
-          },
-        ],
-        userVerification: "preferred",
-      };
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              userId: email,
+              clientDataJSON: arrayBufferToBase64(
+                assertion.response.clientDataJSON
+              ),
+              authenticatorData: arrayBufferToBase64(
+                (assertion.response as AuthenticatorAssertionResponse)
+                  .authenticatorData
+              ),
+              signature: arrayBufferToBase64(
+                (assertion.response as AuthenticatorAssertionResponse).signature
+              ),
+            }),
+          }
+        );
 
-      const assertion = (await navigator.credentials.get({
-        publicKey: publicKeyOptions,
-      })) as PublicKeyCredential;
-
-      const verificationResponse = await fetch(
-        "http://localhost:3002/auth/verify-signature",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            clientDataJSON: arrayBufferToBase64(
-              assertion.response.clientDataJSON
-            ),
-            authenticatorData: arrayBufferToBase64(
-              (assertion.response as AuthenticatorAssertionResponse)
-                .authenticatorData
-            ),
-            signature: arrayBufferToBase64(
-              (assertion.response as AuthenticatorAssertionResponse).signature
-            ),
-          }),
-        }
-      );
-
-      setStatus(
-        verificationResponse.ok
-          ? "Signature verified successfully"
-          : "Failed to verify signature"
-      );
+        setStatus(
+          verificationResponse.ok
+            ? "Signature verified successfully"
+            : "Failed to verify signature"
+        );
+      }
     } catch (error: any) {
       console.log(error);
       setStatus(`Error: ${error.message}`);
