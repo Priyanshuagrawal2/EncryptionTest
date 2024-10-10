@@ -21,6 +21,7 @@ function App() {
       ],
       authenticatorSelection: {
         userVerification: "preferred",
+        // authenticatorAttachment:"platform"
       },
       attestation: "direct",
       timeout: 60000,
@@ -81,7 +82,7 @@ function App() {
           {
             id: base64ToArrayBuffer(credentialId),
             type: "public-key",
-            transports: ["internal"],
+            // transports: ["internal"],
           },
         ],
         userVerification: "preferred",

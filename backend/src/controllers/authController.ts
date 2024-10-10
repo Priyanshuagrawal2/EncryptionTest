@@ -1,7 +1,8 @@
-import { Request, Response } from "express";
 import cache from "../utils/cache";
+import { Request, Response } from "express";
 import { base64ToArrayBuffer } from "../utils/utils";
 import { randomBytes } from "crypto";
+import * as asn1js from 'asn1js';
 const { subtle } = require("crypto").webcrypto;
 
 export const getCredentials = (req: Request, res: Response) => {
@@ -18,6 +19,37 @@ export const setCredentials = (req: Request, res: Response) => {
   cache.set("algorithm", algorithm);
   res.json({ success: true });
 };
+
+function derToRawECDSASignature(derSig: ArrayBuffer) {
+  const signature = asn1js.fromBER(derSig);
+
+  if ((signature.result.valueBlock as any).value.length !== 2) {
+    throw new Error('Invalid ECDSA DER signature format');
+  }
+
+  let r = new Uint8Array((signature.result.valueBlock as any).value[0].valueBlock.valueHex);
+  let s = new Uint8Array((signature.result.valueBlock as any).value[1].valueBlock.valueHex);
+
+  // Handle leading zero padding in r and s
+  if (r.length === 33 && r[0] === 0) {
+    r = r.slice(1); // Remove the leading zero
+  }
+  if (s.length === 33 && s[0] === 0) {
+    s = s.slice(1); // Remove the leading zero
+  }
+
+  // Ensure r and s are both 32 bytes
+  const rPadding = new Uint8Array(32 - r.length).fill(0);
+  const sPadding = new Uint8Array(32 - s.length).fill(0);
+
+  const rawSignature = new Uint8Array(64);
+  rawSignature.set(rPadding, 0);
+  rawSignature.set(r, 32 - r.length);
+  rawSignature.set(sPadding, 32);
+  rawSignature.set(s, 64 - s.length);
+
+  return rawSignature;
+}
 
 export async function verifySignature(req: Request, res: Response) {
   try {
@@ -118,6 +150,7 @@ async function verifySignatureWithPublicKey(
   if (alg === -257) {
     algorithm = { name: "RSASSA-PKCS1-v1_5" };
   } else if (alg === -7) {
+    signatureBuffer = derToRawECDSASignature(signatureBuffer);
     algorithm = { name: "ECDSA", hash: { name: "SHA-256" } };
   }
 
@@ -128,7 +161,6 @@ async function verifySignatureWithPublicKey(
     signatureBase
   );
 }
-
 async function validateChallenge(
   challenge: string,
   clientDataBuffer: ArrayBuffer
