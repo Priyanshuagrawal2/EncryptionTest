@@ -50,7 +50,7 @@ function App() {
       );
 
       const response = await fetch(
-        "https://26d3-2409-40c2-101f-f5da-85ad-ecc7-f559-e1d7.ngrok-free.app/auth/set-credentials",
+        "http://localhost:3002/auth/set-credentials",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -82,7 +82,7 @@ function App() {
         credentials: UserCreds;
         challenge: string;
       }>(
-        "https://26d3-2409-40c2-101f-f5da-85ad-ecc7-f559-e1d7.ngrok-free.app/auth/get-credentials",
+        "http://localhost:3002/auth/get-credentials",
 
         {
           method: "POST",
@@ -113,7 +113,7 @@ function App() {
       })) as PublicKeyCredential;
 
       const verificationResponse = await fetch(
-        "https://26d3-2409-40c2-101f-f5da-85ad-ecc7-f559-e1d7.ngrok-free.app/auth/verify-signature",
+        "http://localhost:3002/auth/verify-signature",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

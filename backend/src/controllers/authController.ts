@@ -71,16 +71,16 @@ export async function verifySignature(req: Request, res: Response) {
       credentialId,
       userId,
     } = req.body;
-    const creds = cache.get<UserCreds[]>(userId);
+    const creds = cache.get<UserCreds>(userId);
     if (!creds) {
       return res.status(400).json({ error: "Credentials not found" });
     }
-    const cred = creds.find((c) => c.credentialId === credentialId);
-    if (!cred) {
-      return res.status(400).json({ error: "Credential not found" });
+
+    if (!creds) {
+      return res.status(400).json({ error: "credential not found" });
     }
-    const publicKey = cred.publicKey;
-    const algorithm = cred.algorithm;
+    const publicKey = creds.publicKey;
+    const algorithm = creds.algorithm;
     if (!publicKey || !algorithm) {
       return res.status(400).json({ error: "Public key not found" });
     }
