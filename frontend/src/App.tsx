@@ -1,10 +1,13 @@
 import { arrayBufferToBase64, base64ToArrayBuffer } from "./util/util";
 import { useState } from "react";
-import axios from "axios"
+import axios from "axios";
 
 export type UserCreds = {
-  credentialId: string, publicKey: string, algorithm: string, transports: string
-}
+  credentialId: string;
+  publicKey: string;
+  algorithm: string;
+  transports: AuthenticatorTransport[];
+};
 
 function App() {
   const [status, setStatus] = useState<string>("");
@@ -22,7 +25,6 @@ function App() {
         name: email,
         displayName: username,
       },
-
 
       pubKeyCredParams: [
         { alg: -7, type: "public-key" }, // ES256
@@ -46,7 +48,7 @@ function App() {
           credential.response as AuthenticatorAttestationResponse
         ).getPublicKey()!
       );
-      console.log(credentialJSON)
+      console.log(credentialJSON);
 
       const response = await fetch(
         "http://localhost:3002/auth/set-credentials",
@@ -60,7 +62,7 @@ function App() {
               publicKey: encodedPublicKey,
               algorithm: credentialJSON.response.publicKeyAlgorithm,
               transports: credentialJSON.response.transports,
-            }
+            },
           }),
         }
       );
@@ -77,17 +79,20 @@ function App() {
 
   async function handleGetCredential() {
     try {
-      const response = await axios.post<UserCreds[], string>(
+      const response = await axios.post<{
+        credentials: UserCreds[];
+        challenge: string;
+      }>(
         "http://localhost:3002/auth/get-credentials",
 
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-           userId: email 
+          userId: email,
         }
       );
-      const responseData = JSON.parse(response);
-      const { credentials, challenge } = responseData;
+
+      const { credentials, challenge } = response.data;
       if (!credentials || !challenge) {
         return handleCreateCredential();
       }
@@ -114,6 +119,7 @@ function App() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               userId: email,
+              credentialId: credential.credentialId,
               clientDataJSON: arrayBufferToBase64(
                 assertion.response.clientDataJSON
               ),
