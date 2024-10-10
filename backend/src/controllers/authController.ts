@@ -7,11 +7,9 @@ const { subtle } = require("crypto").webcrypto;
 
 export const getCredentials = (req: Request, res: Response) => {
   const { userId } = req.body;
-  console.log(req.body);
   const credentials = cache.get<UserCreds[]>(userId);
   const challenge = randomBytes(32).toString("base64");
   cache.set("challenge", challenge);
-  console.log({ challenge, credentials });
   res.json({ credentials, challenge });
 };
 
@@ -31,7 +29,6 @@ export const setCredentials = (req: Request, res: Response) => {
   } else {
     existingCreds = [creds];
   }
-  console.log({ existingCreds });
   cache.set(userId, existingCreds);
   res.json({ success: true });
 };
@@ -84,7 +81,6 @@ export async function verifySignature(req: Request, res: Response) {
     if (!creds) {
       return res.status(400).json({ error: "Credentials not found" });
     }
-    console.log(req.body, creds);
     const cred = creds.find((c) => c.credentialId === credentialId);
     if (!cred) {
       return res.status(400).json({ error: "Credential not found" });

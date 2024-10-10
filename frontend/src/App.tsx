@@ -55,7 +55,6 @@ function App() {
           credential.response as AuthenticatorAttestationResponse
         ).getPublicKey()!
       );
-      console.log(credentialJSON);
 
       const response = await fetch(
         "https://76ae-103-176-134-214.ngrok-free.app/auth/set-credentials",
