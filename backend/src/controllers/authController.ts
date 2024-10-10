@@ -7,16 +7,18 @@ const { subtle } = require("crypto").webcrypto;
 
 export const getCredentials = (req: Request, res: Response) => {
   const credentialId = cache.get("credentialId");
+  const transports = cache.get("transports");
   const challenge = randomBytes(32).toString("base64");
   cache.set("challenge", challenge);
-  res.json({ credentialId, challenge });
+  res.json({ credentialId, challenge, transports });
 };
 
 export const setCredentials = (req: Request, res: Response) => {
-  const { credentialId, publicKey, algorithm } = req.body;
+  const { credentialId, publicKey, algorithm,transports } = req.body;
   cache.set("credentialId", credentialId);
   cache.set("publicKey", publicKey);
   cache.set("algorithm", algorithm);
+  cache.set("transports", transports);
   res.json({ success: true });
 };
 

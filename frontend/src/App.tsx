@@ -21,7 +21,6 @@ function App() {
       ],
       authenticatorSelection: {
         userVerification: "preferred",
-        // authenticatorAttachment:"platform"
       },
       attestation: "direct",
       timeout: 60000,
@@ -38,6 +37,7 @@ function App() {
           credential.response as AuthenticatorAttestationResponse
         ).getPublicKey()!
       );
+      console.log(credentialJSON)
 
       const response = await fetch(
         "http://localhost:3002/auth/set-credentials",
@@ -48,6 +48,7 @@ function App() {
             credentialId: encodedCredentialId,
             publicKey: encodedPublicKey,
             algorithm: credentialJSON.response.publicKeyAlgorithm,
+            transports: credentialJSON.response.transports
           }),
         }
       );
@@ -71,18 +72,17 @@ function App() {
           headers: { "Content-Type": "application/json" },
         }
       );
-      const { credentialId, challenge } = await response.json();
+      const { credentialId, challenge, transports } = await response.json();
       if (!credentialId || !challenge) {
         return handleCreateCredential();
       }
-
       const publicKeyOptions: PublicKeyCredentialRequestOptions = {
         challenge: base64ToArrayBuffer(challenge),
         allowCredentials: [
           {
             id: base64ToArrayBuffer(credentialId),
             type: "public-key",
-            // transports: ["internal"],
+            transports,
           },
         ],
         userVerification: "preferred",
