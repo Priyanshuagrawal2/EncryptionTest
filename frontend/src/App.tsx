@@ -1,11 +1,12 @@
 import { arrayBufferToBase64, base64ToArrayBuffer } from "./util/util";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import axios from "axios";
 
 export type UserCreds = {
   credentialId: string;
   publicKey: string;
   algorithm: string;
+  deviceName: string;
   transports: AuthenticatorTransport[];
 };
 
@@ -13,9 +14,15 @@ function App() {
   const [status, setStatus] = useState<string>("");
   const [username, setUsername] = useState<string>("");
   const [email, setEmail] = useState<string>("");
+  const [deviceName, setDeviceName] = useState<string>("");
+
+  useEffect(() => {
+    setDeviceName(localStorage.getItem("deviceName") || "");
+  }, []);
 
   async function handleCreateCredential() {
     setStatus("Creating credential...");
+    localStorage.setItem("deviceName", deviceName);
     const challenge = window.crypto.getRandomValues(new Uint8Array(32));
     const publicKeyOptions: PublicKeyCredentialCreationOptions = {
       challenge,
@@ -51,13 +58,14 @@ function App() {
       console.log(credentialJSON);
 
       const response = await fetch(
-        "http://localhost:3002/auth/set-credentials",
+        "https://76ae-103-176-134-214.ngrok-free.app/auth/set-credentials",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             userId: email,
             creds: {
+              deviceName: deviceName,
               credentialId: encodedCredentialId,
               publicKey: encodedPublicKey,
               algorithm: credentialJSON.response.publicKeyAlgorithm,
@@ -83,7 +91,7 @@ function App() {
         credentials: UserCreds[];
         challenge: string;
       }>(
-        "http://localhost:3002/auth/get-credentials",
+        "https://76ae-103-176-134-214.ngrok-free.app/auth/get-credentials",
 
         {
           method: "POST",
@@ -93,53 +101,57 @@ function App() {
       );
 
       const { credentials, challenge } = response.data;
-      if (!credentials || !challenge) {
+      const credential = credentials.find(
+        (cred: UserCreds) =>
+          cred.deviceName === localStorage.getItem("deviceName")
+      );
+
+      if (!credential || !challenge) {
         return handleCreateCredential();
       }
-      for (const credential of credentials) {
-        const publicKeyOptions: PublicKeyCredentialRequestOptions = {
-          challenge: base64ToArrayBuffer(challenge),
-          allowCredentials: [
-            {
-              id: base64ToArrayBuffer(credential.credentialId),
-              type: "public-key",
-              transports: credential.transports,
-            },
-          ],
-          userVerification: "preferred",
-        };
-        const assertion = (await navigator.credentials.get({
-          publicKey: publicKeyOptions,
-        })) as PublicKeyCredential;
 
-        const verificationResponse = await fetch(
-          "http://localhost:3002/auth/verify-signature",
+      const publicKeyOptions: PublicKeyCredentialRequestOptions = {
+        challenge: base64ToArrayBuffer(challenge),
+        allowCredentials: [
           {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              userId: email,
-              credentialId: credential.credentialId,
-              clientDataJSON: arrayBufferToBase64(
-                assertion.response.clientDataJSON
-              ),
-              authenticatorData: arrayBufferToBase64(
-                (assertion.response as AuthenticatorAssertionResponse)
-                  .authenticatorData
-              ),
-              signature: arrayBufferToBase64(
-                (assertion.response as AuthenticatorAssertionResponse).signature
-              ),
-            }),
-          }
-        );
+            id: base64ToArrayBuffer(credential.credentialId),
+            type: "public-key",
+            transports: credential.transports,
+          },
+        ],
+        userVerification: "preferred",
+      };
+      const assertion = (await navigator.credentials.get({
+        publicKey: publicKeyOptions,
+      })) as PublicKeyCredential;
 
-        setStatus(
-          verificationResponse.ok
-            ? "Signature verified successfully"
-            : "Failed to verify signature"
-        );
-      }
+      const verificationResponse = await fetch(
+        "https://76ae-103-176-134-214.ngrok-free.app/auth/verify-signature",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: email,
+            credentialId: credential.credentialId,
+            clientDataJSON: arrayBufferToBase64(
+              assertion.response.clientDataJSON
+            ),
+            authenticatorData: arrayBufferToBase64(
+              (assertion.response as AuthenticatorAssertionResponse)
+                .authenticatorData
+            ),
+            signature: arrayBufferToBase64(
+              (assertion.response as AuthenticatorAssertionResponse).signature
+            ),
+          }),
+        }
+      );
+
+      setStatus(
+        verificationResponse.ok
+          ? "Signature verified successfully"
+          : "Failed to verify signature"
+      );
     } catch (error: any) {
       console.log(error);
       setStatus(`Error: ${error.message}`);
@@ -148,6 +160,13 @@ function App() {
   }
   return (
     <div className="App">
+      <input
+        type="text"
+        placeholder="Device Name"
+        value={deviceName}
+        onChange={(e) => setDeviceName(e.target.value)}
+      />
+      <br />{" "}
       <input
         type="text"
         placeholder="Username"
