@@ -2,31 +2,37 @@ import cache from "../utils/cache";
 import { Request, Response } from "express";
 import { base64ToArrayBuffer } from "../utils/utils";
 import { randomBytes } from "crypto";
-import * as asn1js from 'asn1js';
+import * as asn1js from "asn1js";
 const { subtle } = require("crypto").webcrypto;
 
 export const getCredentials = (req: Request, res: Response) => {
-  const {userId} = req.body
-  console.log(req.body)
+  const { userId } = req.body;
+  console.log(req.body);
   const credentials = cache.get<UserCreds[]>(userId);
   const challenge = randomBytes(32).toString("base64");
   cache.set("challenge", challenge);
+  console.log({ challenge, credentials });
   res.json({ credentials, challenge });
 };
 
 export type UserCreds = {
-  credentialId: string, publicKey: string, algorithm: string, transports: string
-}
+  credentialId: string;
+  publicKey: string;
+  algorithm: string;
+  transports: string;
+  deviceName: string;
+};
 
 export const setCredentials = (req: Request, res: Response) => {
   const { userId, creds } = req.body;
-  let existingCreds = cache.get<UserCreds[]>(userId)
+  let existingCreds = cache.get<UserCreds[]>(userId);
   if (existingCreds?.length) {
-    existingCreds.push(creds)
-  }else{
-    existingCreds = [creds]
+    existingCreds.push(creds);
+  } else {
+    existingCreds = [creds];
   }
-  cache.set(userId,existingCreds)
+  console.log({ existingCreds });
+  cache.set(userId, existingCreds);
   res.json({ success: true });
 };
 
@@ -34,11 +40,15 @@ function derToRawECDSASignature(derSig: ArrayBuffer) {
   const signature = asn1js.fromBER(derSig);
 
   if ((signature.result.valueBlock as any).value.length !== 2) {
-    throw new Error('Invalid ECDSA DER signature format');
+    throw new Error("Invalid ECDSA DER signature format");
   }
 
-  let r = new Uint8Array((signature.result.valueBlock as any).value[0].valueBlock.valueHex);
-  let s = new Uint8Array((signature.result.valueBlock as any).value[1].valueBlock.valueHex);
+  let r = new Uint8Array(
+    (signature.result.valueBlock as any).value[0].valueBlock.valueHex
+  );
+  let s = new Uint8Array(
+    (signature.result.valueBlock as any).value[1].valueBlock.valueHex
+  );
 
   // Handle leading zero padding in r and s
   if (r.length === 33 && r[0] === 0) {
@@ -63,16 +73,33 @@ function derToRawECDSASignature(derSig: ArrayBuffer) {
 
 export async function verifySignature(req: Request, res: Response) {
   try {
-    const { clientDataJSON, authenticatorData, signature } = req.body;
-
-    const publicKey = cache.get<string>("publicKey");
-    const algorithm = cache.get<number>("algorithm");
+    const {
+      clientDataJSON,
+      authenticatorData,
+      signature,
+      credentialId,
+      userId,
+    } = req.body;
+    const creds = cache.get<UserCreds[]>(userId);
+    if (!creds) {
+      return res.status(400).json({ error: "Credentials not found" });
+    }
+    console.log(req.body, creds);
+    const cred = creds.find((c) => c.credentialId === credentialId);
+    if (!cred) {
+      return res.status(400).json({ error: "Credential not found" });
+    }
+    const publicKey = cred.publicKey;
+    const algorithm = cred.algorithm;
     if (!publicKey || !algorithm) {
       return res.status(400).json({ error: "Public key not found" });
     }
 
     const publicKeyBuffer = base64ToArrayBuffer(publicKey);
-    const publicKeyObj = await importPublicKey(publicKeyBuffer, algorithm);
+    const publicKeyObj = await importPublicKey(
+      publicKeyBuffer,
+      parseInt(algorithm)
+    );
 
     const clientDataBuffer = base64ToArrayBuffer(clientDataJSON);
     const clientDataHash = await subtle.digest("SHA-256", clientDataBuffer);
@@ -85,7 +112,7 @@ export async function verifySignature(req: Request, res: Response) {
       publicKeyObj,
       signatureBuffer,
       signatureBase,
-      algorithm
+      parseInt(algorithm)
     );
 
     if (isValid) {

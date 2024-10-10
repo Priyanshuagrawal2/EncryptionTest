@@ -41,7 +41,7 @@ function App() {
         userVerification: "preferred",
       },
       attestation: "direct",
-      timeout: 60000,
+      timeout: 30000,
     };
 
     try {
