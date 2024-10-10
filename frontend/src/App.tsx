@@ -6,7 +6,6 @@ export type UserCreds = {
   credentialId: string;
   publicKey: string;
   algorithm: string;
-  deviceName: string;
   transports: AuthenticatorTransport[];
 };
 
@@ -14,15 +13,9 @@ function App() {
   const [status, setStatus] = useState<string>("");
   const [username, setUsername] = useState<string>("");
   const [email, setEmail] = useState<string>("");
-  const [deviceName, setDeviceName] = useState<string>("");
-
-  useEffect(() => {
-    setDeviceName(localStorage.getItem("deviceName") || "");
-  }, []);
 
   async function handleCreateCredential() {
     setStatus("Creating credential...");
-    localStorage.setItem("deviceName", deviceName);
     const challenge = window.crypto.getRandomValues(new Uint8Array(32));
     const publicKeyOptions: PublicKeyCredentialCreationOptions = {
       challenge,
@@ -57,14 +50,13 @@ function App() {
       );
 
       const response = await fetch(
-        "https://76ae-103-176-134-214.ngrok-free.app/auth/set-credentials",
+        "https://26d3-2409-40c2-101f-f5da-85ad-ecc7-f559-e1d7.ngrok-free.app/auth/set-credentials",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             userId: email,
             creds: {
-              deviceName: deviceName,
               credentialId: encodedCredentialId,
               publicKey: encodedPublicKey,
               algorithm: credentialJSON.response.publicKeyAlgorithm,
@@ -87,10 +79,10 @@ function App() {
   async function handleGetCredential() {
     try {
       const response = await axios.post<{
-        credentials: UserCreds[];
+        credentials: UserCreds;
         challenge: string;
       }>(
-        "https://76ae-103-176-134-214.ngrok-free.app/auth/get-credentials",
+        "https://26d3-2409-40c2-101f-f5da-85ad-ecc7-f559-e1d7.ngrok-free.app/auth/get-credentials",
 
         {
           method: "POST",
@@ -100,12 +92,8 @@ function App() {
       );
 
       const { credentials, challenge } = response.data;
-      const credential = credentials.find(
-        (cred: UserCreds) =>
-          cred.deviceName === localStorage.getItem("deviceName")
-      );
 
-      if (!credential || !challenge) {
+      if (!credentials || !challenge) {
         return handleCreateCredential();
       }
 
@@ -113,9 +101,9 @@ function App() {
         challenge: base64ToArrayBuffer(challenge),
         allowCredentials: [
           {
-            id: base64ToArrayBuffer(credential.credentialId),
+            id: base64ToArrayBuffer(credentials.credentialId),
             type: "public-key",
-            transports: credential.transports,
+            transports: credentials.transports,
           },
         ],
         userVerification: "preferred",
@@ -125,13 +113,13 @@ function App() {
       })) as PublicKeyCredential;
 
       const verificationResponse = await fetch(
-        "https://76ae-103-176-134-214.ngrok-free.app/auth/verify-signature",
+        "https://26d3-2409-40c2-101f-f5da-85ad-ecc7-f559-e1d7.ngrok-free.app/auth/verify-signature",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             userId: email,
-            credentialId: credential.credentialId,
+            credentialId: credentials.credentialId,
             clientDataJSON: arrayBufferToBase64(
               assertion.response.clientDataJSON
             ),
@@ -157,15 +145,9 @@ function App() {
       return handleCreateCredential();
     }
   }
+
   return (
     <div className="App">
-      <input
-        type="text"
-        placeholder="Device Name"
-        value={deviceName}
-        onChange={(e) => setDeviceName(e.target.value)}
-      />
-      <br />{" "}
       <input
         type="text"
         placeholder="Username"
