@@ -3,18 +3,22 @@ import { arrayBufferToBase64, base64ToArrayBuffer } from "./util/util";
 
 function App() {
   const [status, setStatus] = useState<string>("");
+  const [username, setUsername] = useState<string>("");
+  const [email, setEmail] = useState<string>("");
 
   async function handleCreateCredential() {
     setStatus("Creating credential...");
     const challenge = window.crypto.getRandomValues(new Uint8Array(32));
     const publicKeyOptions: PublicKeyCredentialCreationOptions = {
       challenge,
-      rp: { name: "Your App" },
+      rp: { name: "Codilytics" },
       user: {
-        id: Uint8Array.from("user_id", (c) => c.charCodeAt(0)),
-        name: "user@example.com",
-        displayName: "User Name",
+        id: Uint8Array.from(username, (c) => c.charCodeAt(0)),
+        name: email,
+        displayName: username,
       },
+  
+      
       pubKeyCredParams: [
         { alg: -7, type: "public-key" }, // ES256
         { alg: -257, type: "public-key" }, // RS256
@@ -125,6 +129,19 @@ function App() {
   }
   return (
     <div className="App">
+      <input
+        type="text"
+        placeholder="Username"
+        value={username}
+        onChange={(e) => setUsername(e.target.value)}
+      />
+      <br />
+      <input
+        type="email"
+        placeholder="Email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+      />
       <br />
       <button onClick={handleGetCredential}>Get Credential</button>
       <br />
@@ -132,4 +149,5 @@ function App() {
     </div>
   );
 }
+
 export default App;
