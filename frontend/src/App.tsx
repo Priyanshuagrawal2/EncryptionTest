@@ -1,6 +1,7 @@
 import { arrayBufferToBase64, base64ToArrayBuffer } from "./util/util";
 import { useEffect, useState } from "react";
 import axios from "axios";
+import OTPModal from "./components/OTPModal";
 
 export type UserCreds = {
   credentialId: string;
@@ -13,11 +14,13 @@ function App() {
   const [status, setStatus] = useState<string>("");
   const [username, setUsername] = useState<string>("");
   const [email, setEmail] = useState<string>("");
-  async function handleCreateCredential() {
+  const [isOTPModalOpen, setIsOTPModalOpen] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+
+  async function handleCreateCredential(challenge: string) {
     setStatus("Creating credential...");
-    const challenge = window.crypto.getRandomValues(new Uint8Array(32));
     const publicKeyOptions: PublicKeyCredentialCreationOptions = {
-      challenge,
+      challenge: base64ToArrayBuffer(challenge),
       rp: { name: "Codilytics" },
       user: {
         id: Uint8Array.from(username, (c) => c.charCodeAt(0)),
@@ -82,20 +85,15 @@ function App() {
       const response = await axios.post<{
         credentials: UserCreds[];
         challenge: string;
-      }>(
-        "https://b5f9-103-176-134-214.ngrok-free.app/auth/get-credentials",
-
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          userId: email,
-        }
-      );
+      }>("https://b5f9-103-176-134-214.ngrok-free.app/auth/get-credentials", {
+        userId: email,
+      });
 
       const { credentials, challenge } = response.data;
 
       if (!credentials || !challenge) {
-        return handleCreateCredential();
+        handleRequestOTP();
+        return;
       }
 
       const publicKeyOptions: PublicKeyCredentialRequestOptions = {
@@ -141,9 +139,51 @@ function App() {
     } catch (error: any) {
       console.log(error);
       setStatus(`Error: ${error.message}`);
-      return handleCreateCredential();
+      handleRequestOTP();
     }
   }
+
+  async function handleRequestOTP() {
+    try {
+      const response = await axios.post(
+        "https://b5f9-103-176-134-214.ngrok-free.app/auth/request-otp",
+        {
+          email,
+        }
+      );
+      if (response.data.success) {
+        setStatus("OTP sent successfully. Please check your email.");
+        setOtpSent(true);
+        setIsOTPModalOpen(true);
+      } else {
+        setStatus("Failed to send OTP. Please try again.");
+      }
+    } catch (error: any) {
+      setStatus(`Error: ${error.message}`);
+    }
+  }
+
+  const handleOTPSubmit = async (otp: string) => {
+    try {
+      const response = await axios.post(
+        "https://b5f9-103-176-134-214.ngrok-free.app/auth/verify-otp",
+        {
+          email,
+          otp,
+        }
+      );
+
+      if (response.data.success) {
+        setIsOTPModalOpen(false);
+        setStatus("OTP verified successfully. Creating credential...");
+        handleCreateCredential(response.data.challenge);
+      } else {
+        setStatus("Invalid OTP. Please try again.");
+      }
+    } catch (error: any) {
+      setStatus(`Error: ${error.message}`);
+    }
+  };
 
   return (
     <div className="App">
@@ -163,7 +203,15 @@ function App() {
       <br />
       <button onClick={handleGetCredential}>Get Credential</button>
       <br />
+      {otpSent && (
+        <button onClick={() => setIsOTPModalOpen(true)}>Enter OTP</button>
+      )}
       <p>{status}</p>
+      <OTPModal
+        isOpen={isOTPModalOpen}
+        onClose={() => setIsOTPModalOpen(false)}
+        onSubmit={handleOTPSubmit}
+      />
     </div>
   );
 }

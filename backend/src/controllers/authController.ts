@@ -4,6 +4,8 @@ import { base64ToArrayBuffer } from "../utils/utils";
 import { randomBytes } from "crypto";
 import * as asn1js from "asn1js";
 const { subtle } = require("crypto").webcrypto;
+import { generateOTP, verifyOTP } from "../utils/otpUtils";
+import { sendOTP } from "../utils/emailUtils";
 
 export const getCredentials = (req: Request, res: Response) => {
   const { userId } = req.body;
@@ -217,4 +219,45 @@ const compareBase64Strings = (str1: string, str2: string) => {
   const decodedStr1 = decodeBase64(base64ToStandard(str1));
   const decodedStr2 = decodeBase64(base64ToStandard(str2));
   return decodedStr1 === decodedStr2;
+};
+
+export const requestOTP = async (req: Request, res: Response) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: "Email is required" });
+  }
+
+  const otp = generateOTP();
+  cache.set(`otp:${email}`, otp, 600); // Store OTP for 10 minutes
+
+  try {
+    sendOTP(email, otp);
+    res.json({ success: true, message: "OTP sent successfully" });
+  } catch (error) {
+    console.error("Error sending OTP:", error);
+    res.status(500).json({ error: "Failed to send OTP" });
+  }
+};
+
+export const verifyOTPAndCreateCredential = async (
+  req: Request,
+  res: Response
+) => {
+  const { email, otp } = req.body;
+
+  if (!email || !otp) {
+    return res.status(400).json({ error: "Email and OTP are required" });
+  }
+
+  const storedOTP = cache.get<string>(`otp:${email}`);
+
+  if (!storedOTP || !verifyOTP(otp, storedOTP)) {
+    return res.status(400).json({ error: "Invalid OTP" });
+  }
+
+  // OTP is valid, proceed with credential creation
+  const challenge = randomBytes(32).toString("base64");
+  cache.set("challenge", challenge);
+  res.json({ success: true, challenge });
 };
