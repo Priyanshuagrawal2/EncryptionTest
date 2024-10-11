@@ -13,7 +13,6 @@ function App() {
   const [status, setStatus] = useState<string>("");
   const [username, setUsername] = useState<string>("");
   const [email, setEmail] = useState<string>("");
-
   async function handleCreateCredential() {
     setStatus("Creating credential...");
     const challenge = window.crypto.getRandomValues(new Uint8Array(32));
@@ -32,6 +31,8 @@ function App() {
       ],
       authenticatorSelection: {
         userVerification: "preferred",
+        residentKey: "required",
+        // authenticatorAttachment: "cross-platform",
       },
       attestation: "direct",
       timeout: 30000,
@@ -50,7 +51,7 @@ function App() {
       );
 
       const response = await fetch(
-        "https://26d3-2409-40c2-101f-f5da-85ad-ecc7-f559-e1d7.ngrok-free.app/auth/set-credentials",
+        "https://6d9e-103-176-134-214.ngrok-free.app/auth/set-credentials",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -79,10 +80,10 @@ function App() {
   async function handleGetCredential() {
     try {
       const response = await axios.post<{
-        credentials: UserCreds;
+        credentials: UserCreds[];
         challenge: string;
       }>(
-        "https://26d3-2409-40c2-101f-f5da-85ad-ecc7-f559-e1d7.ngrok-free.app/auth/get-credentials",
+        "https://6d9e-103-176-134-214.ngrok-free.app/auth/get-credentials",
 
         {
           method: "POST",
@@ -99,27 +100,25 @@ function App() {
 
       const publicKeyOptions: PublicKeyCredentialRequestOptions = {
         challenge: base64ToArrayBuffer(challenge),
-        allowCredentials: [
-          {
-            id: base64ToArrayBuffer(credentials.credentialId),
-            type: "public-key",
-            transports: credentials.transports,
-          },
-        ],
+        allowCredentials: credentials.map((cred) => ({
+          id: base64ToArrayBuffer(cred.credentialId),
+          type: "public-key",
+          transports: cred.transports,
+        })),
         userVerification: "preferred",
       };
       const assertion = (await navigator.credentials.get({
         publicKey: publicKeyOptions,
       })) as PublicKeyCredential;
-
+      console.log(assertion);
       const verificationResponse = await fetch(
-        "https://26d3-2409-40c2-101f-f5da-85ad-ecc7-f559-e1d7.ngrok-free.app/auth/verify-signature",
+        "https://6d9e-103-176-134-214.ngrok-free.app/auth/verify-signature",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             userId: email,
-            credentialId: credentials.credentialId,
+            // credentialId: credential.credentialId,
             clientDataJSON: arrayBufferToBase64(
               assertion.response.clientDataJSON
             ),
