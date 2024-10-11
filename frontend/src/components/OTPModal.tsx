@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import "./OTPModal.css";
 
 interface OTPModalProps {
   isOpen: boolean;
