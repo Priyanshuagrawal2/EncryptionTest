@@ -7,7 +7,7 @@ const { subtle } = require("crypto").webcrypto;
 
 export const getCredentials = (req: Request, res: Response) => {
   const { userId } = req.body;
-  const credentials = cache.get<UserCreds>(userId);
+  const credentials = cache.get<UserCreds[]>(userId);
   const challenge = randomBytes(32).toString("base64");
   cache.set("challenge", challenge);
   res.json({ credentials, challenge });
@@ -22,8 +22,13 @@ export type UserCreds = {
 
 export const setCredentials = (req: Request, res: Response) => {
   const { userId, creds } = req.body;
-  let existingCreds = cache.set<UserCreds>(userId, creds);
-
+  let existingCreds = cache.get<UserCreds[]>(userId);
+  if (existingCreds?.length) {
+    existingCreds.push(creds);
+  } else {
+    existingCreds = [creds];
+  }
+  cache.set(userId, existingCreds);
   res.json({ success: true });
 };
 
@@ -71,16 +76,18 @@ export async function verifySignature(req: Request, res: Response) {
       credentialId,
       userId,
     } = req.body;
-    const creds = cache.get<UserCreds>(userId);
+    const creds = cache.get<UserCreds[]>(userId);
     if (!creds) {
       return res.status(400).json({ error: "Credentials not found" });
     }
-
-    if (!creds) {
-      return res.status(400).json({ error: "credential not found" });
+    const cred = creds.find((c) =>
+      compareBase64Strings(c.credentialId, credentialId)
+    );
+    if (!cred) {
+      return res.status(400).json({ error: "Credential not found" });
     }
-    const publicKey = creds.publicKey;
-    const algorithm = creds.algorithm;
+    const publicKey = cred.publicKey;
+    const algorithm = cred.algorithm;
     if (!publicKey || !algorithm) {
       return res.status(400).json({ error: "Public key not found" });
     }

@@ -103,7 +103,7 @@ function App() {
         allowCredentials: credentials.map((cred) => ({
           id: base64ToArrayBuffer(cred.credentialId),
           type: "public-key",
-          transports: cred.transports,
+          transports: ["internal", "hybrid"],
         })),
         userVerification: "preferred",
       };
@@ -118,7 +118,7 @@ function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             userId: email,
-            // credentialId: credential.credentialId,
+            credentialId: assertion.id,
             clientDataJSON: arrayBufferToBase64(
               assertion.response.clientDataJSON
             ),
