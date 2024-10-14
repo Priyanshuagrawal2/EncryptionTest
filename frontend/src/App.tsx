@@ -2,6 +2,7 @@ import { arrayBufferToBase64, base64ToArrayBuffer } from "./util/util";
 import { useEffect, useState } from "react";
 import axios from "axios";
 import OTPModal from "./components/OTPModal";
+import urlJoin from "url-join";
 
 export type UserCreds = {
   credentialId: string;
@@ -9,6 +10,8 @@ export type UserCreds = {
   algorithm: string;
   transports: AuthenticatorTransport[];
 };
+
+const baseUrl = "http://localhost:3002";
 
 function App() {
   const [status, setStatus] = useState<string>("");
@@ -45,7 +48,10 @@ function App() {
       const credential = (await navigator.credentials.create({
         publicKey: publicKeyOptions,
       })) as any;
-      const credentialJSON = credential.toJSON();
+      const attestationResponse =
+        credential.response as AuthenticatorAttestationResponse;
+      const attestationAlgorithm = attestationResponse.getPublicKeyAlgorithm();
+      const transports = (attestationResponse as any).getTransports?.() ?? [];
       const encodedCredentialId = arrayBufferToBase64(credential.rawId);
       const encodedPublicKey = arrayBufferToBase64(
         (
@@ -53,22 +59,19 @@ function App() {
         ).getPublicKey()!
       );
 
-      const response = await fetch(
-        "https://b5f9-103-176-134-214.ngrok-free.app/auth/set-credentials",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userId: email,
-            creds: {
-              credentialId: encodedCredentialId,
-              publicKey: encodedPublicKey,
-              algorithm: credentialJSON.response.publicKeyAlgorithm,
-              transports: credentialJSON.response.transports,
-            },
-          }),
-        }
-      );
+      const response = await fetch(urlJoin(baseUrl, "/auth/set-credentials"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: email,
+          creds: {
+            credentialId: encodedCredentialId,
+            publicKey: encodedPublicKey,
+            algorithm: attestationAlgorithm,
+            transports: transports,
+          },
+        }),
+      });
 
       setStatus(
         response.ok
@@ -85,7 +88,7 @@ function App() {
       const response = await axios.post<{
         credentials: UserCreds[];
         challenge: string;
-      }>("https://b5f9-103-176-134-214.ngrok-free.app/auth/get-credentials", {
+      }>(urlJoin(baseUrl, "/auth/get-credentials"), {
         userId: email,
       });
 
@@ -95,22 +98,35 @@ function App() {
         handleRequestOTP();
         return;
       }
+      const reorderTransports = (
+        transports: AuthenticatorTransport[] = []
+      ): AuthenticatorTransport[] => {
+        if (transports.includes("internal")) {
+          return ["internal", ...transports.filter((t) => t !== "internal")];
+        }
+        return transports;
+      };
 
       const publicKeyOptions: PublicKeyCredentialRequestOptions = {
         challenge: base64ToArrayBuffer(challenge),
         allowCredentials: credentials.map((cred) => ({
           id: base64ToArrayBuffer(cred.credentialId),
           type: "public-key",
-          transports: ["internal", "hybrid"],
+          transports: reorderTransports(cred.transports) ?? [
+            "internal",
+            "hybrid",
+            "usb",
+            "nfc",
+            "ble",
+          ],
         })),
         userVerification: "preferred",
       };
       const assertion = (await navigator.credentials.get({
         publicKey: publicKeyOptions,
       })) as PublicKeyCredential;
-      console.log(assertion);
       const verificationResponse = await fetch(
-        "https://b5f9-103-176-134-214.ngrok-free.app/auth/verify-signature",
+        urlJoin(baseUrl, "/auth/verify-signature"),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -145,12 +161,9 @@ function App() {
 
   async function handleRequestOTP() {
     try {
-      const response = await axios.post(
-        "https://b5f9-103-176-134-214.ngrok-free.app/auth/request-otp",
-        {
-          email,
-        }
-      );
+      const response = await axios.post(urlJoin(baseUrl, "/auth/request-otp"), {
+        email,
+      });
       if (response.data.success) {
         setStatus("OTP sent successfully. Please check your email.");
         setOtpSent(true);
@@ -165,13 +178,10 @@ function App() {
 
   const handleOTPSubmit = async (otp: string) => {
     try {
-      const response = await axios.post(
-        "https://b5f9-103-176-134-214.ngrok-free.app/auth/verify-otp",
-        {
-          email,
-          otp,
-        }
-      );
+      const response = await axios.post(urlJoin(baseUrl, "/auth/verify-otp"), {
+        email,
+        otp,
+      });
 
       if (response.data.success) {
         setIsOTPModalOpen(false);
