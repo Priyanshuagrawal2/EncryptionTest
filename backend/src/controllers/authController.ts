@@ -153,7 +153,6 @@ export const setCredentials = async (req: Request, res: Response) => {
 export async function getAuthOptions(req: Request, res: Response) {
   const { userId } = req.body;
   const creds = cache.get<UserCreds[]>(userId)!;
-  console.log("creds", creds);
   const allowCredentials = creds?.map((c) => ({
     id: c.credentialID!,
     browser: c.browser,

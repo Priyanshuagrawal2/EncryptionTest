@@ -69,7 +69,6 @@ export const getOrigin = (_origin: string, userAgent?: string): string => {
 };
 
 export function getBrowserInfo(userAgent: string) {
-  console.log("userAgent", userAgent);
   let os = "Unknown OS";
   let browserName = "Unknown Browser";
 

@@ -60,8 +60,6 @@ function App() {
       challenge,
     } as PublicKeyCredentialCreationOptions;
 
-    console.log("[CredentialCreationOptions]", decodedOptions);
-
     try {
       // Create a new attestation.
       const credential = (await navigator.credentials.create({
@@ -184,8 +182,6 @@ function App() {
       } as AuthenticationResponseJSON;
 
       const parsedCredential = await parseAuthenticationCredential(credential);
-
-      console.log("[AuthenticationResponseJSON]", parsedCredential);
 
       // Verify and store the credential.
       const verificationResponse = await fetch(
