@@ -1,6 +1,6 @@
 import cache from "../utils/cache";
 import { Request, Response } from "express";
-import { getOrigin } from "../utils/utils";
+import { getBrowserInfo, getOrigin } from "../utils/utils";
 import { createHash, randomBytes } from "crypto";
 import { generateOTP, verifyOTP } from "../utils/otpUtils";
 import { sendOTP } from "../utils/emailUtils";
@@ -17,23 +17,34 @@ import { WebAuthnCredential } from "@simplewebauthn/server/script/deps";
 const WEBAUTHN_TIMEOUT = 1000 * 60 * 5; // 5 minutes
 
 export async function getRegisterOptions(req: Request, res: Response) {
+  const { username, userId } = req.body;
   const encoder = new TextEncoder();
-  const name = "Unnamed User";
-  const displayName = "Unnamed User";
+  const name = userId;
+  const displayName = username;
   const data = encoder.encode(`${name}${displayName}`);
-  const userId = createHash("sha256").update(data).digest();
+  const userIdHash = createHash("sha256").update(data).digest();
   const rpID = process.env.RP_ID || "localhost";
+  const existingCreds = cache.get<UserCreds[]>(userId);
+  let excludeCredentials: WebAuthnCredential[] = [];
+  if (existingCreds?.length) {
+    excludeCredentials = existingCreds.map((cred) => ({
+      id: cred.credentialID,
+      counter: cred.counter,
+      publicKey: isoBase64URL.toBuffer(cred.credentialPublicKey),
+      transports: cred.transports as unknown as AuthenticatorTransportFuture[],
+    }));
+  }
   const options = await generateRegistrationOptions({
     rpName: process.env.RP_NAME || "Your Application Name",
-    userID: userId,
-    userName: "user.name",
-    userDisplayName: "user.displayName",
+    userID: userIdHash,
+    userName: userId,
+    userDisplayName: displayName,
     rpID,
     timeout: 6000,
     // Prompt users for additional information about the authenticator.
     attestationType: "none",
     // Prevent users from re-registering existing authenticators
-    // excludeCredentials,
+    excludeCredentials,
     authenticatorSelection: { userVerification: "required" },
     // extensions,
   });
@@ -70,7 +81,6 @@ export type UserCreds = {
   credentialBackedUp: boolean;
   browser: string;
   os: string;
-  platform: string;
   transports: string;
   clientExtensionResults: string;
 };
@@ -112,8 +122,9 @@ export const setCredentials = async (req: Request, res: Response) => {
   const transports = response.transports || [];
 
   const base64PublicKey = isoBase64URL.fromBuffer(credentialPublicKey);
+  const browserInfo = getBrowserInfo(req.get("User-Agent")!);
   const creds = {
-    user_id: "userId",
+    user_id: userId,
     credentialID,
     credentialPublicKey: base64PublicKey,
     aaguid,
@@ -123,6 +134,8 @@ export const setCredentials = async (req: Request, res: Response) => {
     credentialDeviceType,
     credentialBackedUp,
     transports,
+    browser: browserInfo.browser,
+    os: browserInfo.os,
     clientExtensionResults,
   };
 
@@ -140,10 +153,14 @@ export const setCredentials = async (req: Request, res: Response) => {
 export async function getAuthOptions(req: Request, res: Response) {
   const { userId } = req.body;
   const creds = cache.get<UserCreds[]>(userId)!;
+  console.log("creds", creds);
   const allowCredentials = creds?.map((c) => ({
     id: c.credentialID!,
+    browser: c.browser,
+    os: c.os,
     transports: c.transports! as unknown as AuthenticatorTransportFuture[],
   }));
+
   const options = await generateAuthenticationOptions({
     timeout: 6000,
     allowCredentials,
@@ -198,7 +215,6 @@ export async function verifySignature(req: Request, res: Response) {
       expectedOrigin,
       expectedRPID,
       credential,
-      // Since this is testing the client, verifying the UV flag here doesn't matter.
       requireUserVerification: true,
     });
 

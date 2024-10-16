@@ -11,7 +11,7 @@ import {
   PublicKeyCredentialCreationOptions,
   PublicKeyCredentialRequestOptions,
 } from "@simplewebauthn/types";
-import { parseAuthenticationCredential } from "./util/util";
+import { getBrowserInfo, parseAuthenticationCredential } from "./util/util";
 
 export type UserCreds = {
   credentialId: string;
@@ -32,7 +32,11 @@ function App() {
   async function handleCreateCredential() {
     setStatus("Creating credential...");
     const response = await axios.post(
-      urlJoin(baseUrl, "/auth/get-register-options")
+      urlJoin(baseUrl, "/auth/get-register-options"),
+      {
+        username,
+        userId: email,
+      }
     );
     const { options } = response.data;
 
@@ -41,7 +45,15 @@ function App() {
       id: base64url.decode(options.user.id),
     } as PublicKeyCredentialUserEntity;
     const challenge = base64url.decode(options.challenge);
-
+    if (options.excludeCredentials) {
+      options.excludeCredentials = options.excludeCredentials.map(
+        (cred: any) => ({
+          id: base64url.decode(cred.id),
+          type: "public-key",
+          transports: cred.transports,
+        })
+      );
+    }
     const decodedOptions = {
       ...options,
       user,
@@ -113,13 +125,19 @@ function App() {
 
       options.challenge = base64url.decode(options.challenge);
       if (options.allowCredentials?.length) {
-        options.allowCredentials = options.allowCredentials.map(
-          (cred: any) => ({
+        // const browserInfo = getBrowserInfo(navigator.userAgent);
+        options.allowCredentials = options.allowCredentials.map((cred: any) => {
+          // if (
+          //   browserInfo.browser == cred.browser &&
+          //   browserInfo.os == cred.os
+          // ) {
+          return {
             id: base64url.decode(cred.id),
             type: "public-key",
             transports: cred.transports,
-          })
-        );
+          };
+          // }
+        });
       } else {
         handleRequestOTP();
         return;

@@ -178,3 +178,43 @@ function parseClientExtensionResults(
   }
   return clientExtensionResults;
 }
+
+export function getBrowserInfo(userAgent: string) {
+  let os = "Unknown OS";
+  let browserName = "Unknown Browser";
+
+  // Check for OS
+  if (userAgent.includes("Win")) {
+    os = "Windows";
+  } else if (userAgent.includes("Mac")) {
+    os = "MacOS";
+  } else if (userAgent.includes("Linux")) {
+    os = "Linux";
+  } else if (userAgent.includes("iPhone")) {
+    os = "iOS (iPhone)";
+  } else if (userAgent.includes("iPad")) {
+    os = "iOS (iPad)";
+  } else if (userAgent.includes("Android")) {
+    os = "Android";
+  }
+
+  // Check for browser
+  if (userAgent.includes("Chrome")) {
+    browserName = "Chrome";
+  } else if (userAgent.includes("Firefox")) {
+    browserName = "Firefox";
+  } else if (userAgent.includes("Safari") && !userAgent.includes("Chrome")) {
+    browserName = "Safari";
+  } else if (userAgent.includes("MSIE") || userAgent.includes("Trident")) {
+    browserName = "Internet Explorer";
+  } else if (userAgent.includes("Edge")) {
+    browserName = "Microsoft Edge";
+  } else if (userAgent.includes("Opera") || userAgent.includes("OPR")) {
+    browserName = "Opera";
+  }
+
+  return {
+    os: os,
+    browser: browserName,
+  };
+}
