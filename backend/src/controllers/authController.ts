@@ -1,12 +1,34 @@
 import cache from "../utils/cache";
-import { Request, Response } from "express";
-import { base64ToArrayBuffer } from "../utils/utils";
+import express, { Request, Response } from "express";
+import { base64ToArrayBuffer, getOrigin } from "../utils/utils";
 import { createHash, randomBytes } from "crypto";
 import * as asn1js from "asn1js";
 const { subtle } = require("crypto").webcrypto;
 import { generateOTP, verifyOTP } from "../utils/otpUtils";
 import { sendOTP } from "../utils/emailUtils";
-import { generateRegistrationOptions } from "@simplewebauthn/server";
+import {
+  generateAuthenticationOptions,
+  generateRegistrationOptions,
+  verifyAuthenticationResponse,
+  VerifyAuthenticationResponseOpts,
+  verifyRegistrationResponse,
+} from "@simplewebauthn/server";
+import { isoBase64URL } from "@simplewebauthn/server/helpers";
+import {
+  AuthenticationResponseJSON,
+  AuthenticatorSelectionCriteria,
+  AuthenticatorDevice,
+  AttestationConveyancePreference,
+  PublicKeyCredentialParameters,
+  PublicKeyCredentialUserEntityJSON,
+  AuthenticatorTransportFuture,
+} from "@simplewebauthn/types";
+import {
+  RegistrationResponseJSON,
+  WebAuthnCredential,
+} from "@simplewebauthn/server/script/deps";
+import { config } from "node:process";
+const WEBAUTHN_TIMEOUT = 1000 * 60 * 5; // 5 minutes
 
 export async function getRegisterOptions(req: Request, res: Response) {
   const encoder = new TextEncoder();
@@ -28,7 +50,29 @@ export async function getRegisterOptions(req: Request, res: Response) {
     authenticatorSelection: { userVerification: "required" },
     // extensions,
   });
+  cache.set("challenge", options.challenge);
+  cache.set("timeout", new Date().getTime() + WEBAUTHN_TIMEOUT);
+
   return res.json({ options });
+}
+
+export async function verifyNew(req: Request, res: Response) {
+  const credential = req.body as RegistrationResponseJSON;
+
+  const expectedChallenge = cache.get<string>("challenge")!;
+  const expectedRPID = "localhost";
+  let expectedOrigin = getOrigin(
+    "http://localhost:3002",
+    req.get("User-Agent")
+  );
+  const verification = await verifyRegistrationResponse({
+    response: credential,
+    expectedChallenge,
+    expectedOrigin,
+    expectedRPID,
+    // Since this is testing the client, verifying the UV flag here doesn't matter.
+    requireUserVerification: false,
+  });
 }
 
 /**
@@ -46,10 +90,21 @@ export const getCredentials = (req: Request, res: Response) => {
 };
 
 export type UserCreds = {
-  credentialId: string;
-  publicKey: string;
-  algorithm: string;
+  user_id: string;
+  credentialID: string;
+  credentialPublicKey: string;
+  aaguid: string;
+  counter: number;
+  registered: number;
+  user_verifying: boolean;
+  authenticatorAttachment: string;
+  credentialDeviceType: string;
+  credentialBackedUp: boolean;
+  browser: string;
+  os: string;
+  platform: string;
   transports: string;
+  clientExtensionResults: string;
 };
 
 /**
@@ -58,15 +113,67 @@ export type UserCreds = {
  * @param {Response} res - Express response object.
  * @returns {void}
  */
-export const setCredentials = (req: Request, res: Response) => {
-  const { userId, creds } = req.body;
+export const setCredentials = async (req: Request, res: Response) => {
+  const { credential, userId } = req.body;
+  console.log(req.body);
+
+  const expectedChallenge = cache.get<string>("challenge")!;
+  const expectedRPID = "localhost";
+  let expectedOrigin = getOrigin(
+    "http://localhost:5173",
+    req.get("User-Agent")
+  );
+
+  const verification = await verifyRegistrationResponse({
+    response: credential,
+    expectedChallenge,
+    expectedOrigin,
+    expectedRPID,
+    // Since this is testing the client, verifying the UV flag here doesn't matter.
+    requireUserVerification: false,
+  });
+  const { verified, registrationInfo } = verification;
+  console.log({ registrationInfo });
+  if (!verified || !registrationInfo) {
+    throw new Error("User verification failed.");
+  }
+  const {
+    aaguid,
+    credential: { id: credentialID, publicKey: credentialPublicKey, counter },
+    credentialDeviceType,
+    credentialBackedUp,
+  } = registrationInfo;
+  const { response, clientExtensionResults } = credential;
+
+  const transports = response.transports || [];
+
+  const base64PublicKey = isoBase64URL.fromBuffer(credentialPublicKey);
+  const creds = {
+    user_id: "userId",
+    credentialID,
+    credentialPublicKey: base64PublicKey,
+    aaguid,
+    counter,
+    registered: new Date().getTime(),
+    user_verifying: registrationInfo.userVerified,
+    authenticatorAttachment: "undefined",
+    credentialDeviceType,
+    credentialBackedUp,
+    browser: req.get("User-Agent"),
+    os: req.get("User-Agent"),
+    platform: req.get("User-Agent"),
+    transports,
+    clientExtensionResults,
+  };
+  // cache.set("publicKey", base64PublicKey);
+  // const { userId, creds } = req.body;
   let existingCreds = cache.get<UserCreds[]>(userId);
   if (existingCreds?.length) {
-    existingCreds.push(creds);
+    existingCreds.push(creds as UserCreds);
   } else {
-    existingCreds = [creds];
+    existingCreds = [creds as UserCreds];
   }
-  cache.set(userId, existingCreds);
+  cache.set("userId", existingCreds);
   res.json({ success: true });
 };
 
@@ -108,6 +215,25 @@ function derToRawECDSASignature(derSig: ArrayBuffer): Uint8Array {
   return rawSignature;
 }
 
+export async function getAuthOptions(req: Request, res: Response) {
+  const creds = cache.get<UserCreds[]>("userId")!;
+  console.log({ creds });
+  const allowCredentials = creds?.map((c) => ({
+    id: c.credentialID!,
+    transports: c.transports! as unknown as AuthenticatorTransportFuture[],
+  }));
+  console.log(allowCredentials);
+  const options = await generateAuthenticationOptions({
+    timeout: 6000,
+    allowCredentials,
+    userVerification: "required",
+    rpID: "localhost",
+  });
+  cache.set("challenge", options.challenge);
+  cache.set("timeout", new Date().getTime() + WEBAUTHN_TIMEOUT);
+  res.json({ options });
+}
+
 /**
  * Verifies the signature provided by the client.
  * @param {Request} req - Express request object containing signature data.
@@ -115,69 +241,63 @@ function derToRawECDSASignature(derSig: ArrayBuffer): Uint8Array {
  * @returns {Promise<void>}
  */
 export async function verifySignature(req: Request, res: Response) {
+  const expectedChallenge = cache.get<string>("challenge")!;
+  const expectedRPID = "localhost";
+  const expectedOrigin = getOrigin(
+    "http://localhost:5173",
+    req.get("User-Agent")
+  );
+
   try {
-    const {
-      clientDataJSON,
-      authenticatorData,
-      signature,
-      credentialId,
-      userId,
-    } = req.body;
-    const creds = cache.get<UserCreds[]>(userId);
-    if (!creds) {
-      return res.status(400).json({ error: "Credentials not found" });
-    }
-    const cred = creds.find((c) =>
-      compareBase64Strings(c.credentialId, credentialId)
+    const { credential: claimedCred, userId } = req.body;
+
+    const credentials = cache.get<UserCreds[]>("userId")!;
+    console.log({ credentials, claimedCred });
+    let storedCred = credentials.find(
+      (cred) => cred.credentialID === claimedCred.id
     );
-    if (!cred) {
-      return res.status(400).json({ error: "Credential not found" });
-    }
-    const publicKey = cred.publicKey;
-    const algorithm = cred.algorithm;
-    if (!publicKey || !algorithm) {
-      return res.status(400).json({ error: "Public key not found" });
+    if (!storedCred) {
+      throw new Error("Authenticating credential not found.");
     }
 
-    const publicKeyBuffer = base64ToArrayBuffer(publicKey);
-    const publicKeyObj = await importPublicKey(
-      publicKeyBuffer,
-      parseInt(algorithm)
+    const credentialPublicKey = isoBase64URL.toBuffer(
+      storedCred.credentialPublicKey
     );
+    const { counter, transports } = storedCred;
 
-    const clientDataBuffer = base64ToArrayBuffer(clientDataJSON);
-    const clientDataHash = await subtle.digest("SHA-256", clientDataBuffer);
-    const authDataBuffer = base64ToArrayBuffer(authenticatorData);
+    const credential: WebAuthnCredential = {
+      id: storedCred.credentialID,
+      publicKey: credentialPublicKey,
+      counter,
+      transports: transports as unknown as AuthenticatorTransportFuture[],
+    };
 
-    const signatureBase = createSignatureBase(authDataBuffer, clientDataHash);
-    const signatureBuffer = base64ToArrayBuffer(signature);
+    console.log("Claimed credential", claimedCred);
+    console.log("Stored credential", storedCred);
 
-    const isValid = await verifySignatureWithPublicKey(
-      publicKeyObj,
-      signatureBuffer,
-      signatureBase,
-      parseInt(algorithm)
-    );
+    const verification = await verifyAuthenticationResponse({
+      response: claimedCred,
+      expectedChallenge,
+      expectedOrigin,
+      expectedRPID,
+      credential,
+      // Since this is testing the client, verifying the UV flag here doesn't matter.
+      requireUserVerification: false,
+    });
 
-    if (isValid) {
-      const challenge = cache.get<string>("challenge");
-      if (!challenge) {
-        return res.status(400).json({ error: "Challenge not found" });
-      }
-      const isValidChallenge = await validateChallenge(
-        challenge,
-        clientDataBuffer
-      );
-      if (!isValidChallenge) {
-        return res.status(401).json({ error: "Invalid challenge" });
-      }
-      res.json({ isValid });
-    } else {
-      res.status(401).json({ error: "Invalid signature" });
+    const { verified, authenticationInfo } = verification;
+
+    if (!verified) {
+      throw new Error("User verification failed.");
     }
-  } catch (error) {
-    console.error("Error verifying signature:", error);
-    res.status(500).json({ error: "Internal server error" });
+
+    storedCred.counter = authenticationInfo.newCounter;
+
+    return res.json(storedCred);
+  } catch (error: any) {
+    console.error(error);
+
+    return res.status(400).json({ status: false, error: error.message });
   }
 }
 

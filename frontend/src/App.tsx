@@ -95,19 +95,40 @@ function App() {
           credential.response as AuthenticatorAttestationResponse
         ).getPublicKey()!
       );
+      const rawId = base64url.encode(credential.rawId);
+      const clientDataJSON = base64url.encode(
+        credential.response.clientDataJSON
+      );
+      const attestationObject = base64url.encode(
+        credential.response.attestationObject
+      );
+      const clientExtensionResults: AuthenticationExtensionsClientOutputs = {};
+
+      // if `getClientExtensionResults()` is supported, serialize the result.
+      if (credential.getClientExtensionResults) {
+        const extensions: AuthenticationExtensionsClientOutputs =
+          credential.getClientExtensionResults();
+        if (extensions.credProps) {
+          clientExtensionResults.credProps = extensions.credProps;
+        }
+      }
+
+      const encodedCredential = {
+        id: credential.id,
+        rawId,
+        response: {
+          clientDataJSON,
+          attestationObject,
+          transports,
+        },
+        type: credential.type,
+        clientExtensionResults,
+      } as RegistrationResponseJSON;
 
       const response = await fetch(urlJoin(baseUrl, "/auth/set-credentials"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: email,
-          creds: {
-            credentialId: encodedCredentialId,
-            publicKey: encodedPublicKey,
-            algorithm: attestationAlgorithm,
-            transports: transports,
-          },
-        }),
+        body: JSON.stringify({ credential, userId: email }),
       });
 
       setStatus(
@@ -122,19 +143,19 @@ function App() {
 
   async function handleGetCredential() {
     try {
-      const response = await axios.post<{
-        credentials: UserCreds[];
-        challenge: string;
-      }>(urlJoin(baseUrl, "/auth/get-credentials"), {
-        userId: email,
-      });
+      // const response = await axios.post<{
+      //   credentials: UserCreds[];
+      //   challenge: string;
+      // }>(urlJoin(baseUrl, "/auth/get-credentials"), {
+      //   userId: email,
+      // });
 
-      const { credentials, challenge } = response.data;
-
-      if (!credentials || !challenge) {
-        handleRequestOTP();
-        return;
-      }
+      // const { credentials } = response.data;
+      // console.log(credentials);
+      // if (!credentials) {
+      //   handleRequestOTP();
+      //   return;
+      // }
       const reorderTransports = (
         transports: AuthenticatorTransport[] = []
       ): AuthenticatorTransport[] => {
@@ -144,45 +165,119 @@ function App() {
         return transports;
       };
 
-      const publicKeyOptions: PublicKeyCredentialRequestOptions = {
-        challenge: base64ToArrayBuffer(challenge),
-        allowCredentials: credentials.map((cred) => ({
-          id: base64ToArrayBuffer(cred.credentialId),
-          type: "public-key",
-          transports: reorderTransports(cred.transports) ?? [
-            "internal",
-            "hybrid",
-            "usb",
-            "nfc",
-            "ble",
-          ],
-        })),
-        userVerification: "preferred",
-      };
-      const assertion = (await navigator.credentials.get({
-        publicKey: publicKeyOptions,
-      })) as PublicKeyCredential;
+      const res = await axios.post(urlJoin(baseUrl, "/auth/get-auth-options"), {
+        userId: email,
+      });
+      const { options } = res.data;
+      // const publicKeyOptions: PublicKeyCredentialRequestOptions = {
+      //   challenge: base64ToArrayBuffer(challenge),
+      //   allowCredentials: credentials.map((cred) => ({
+      //     id: base64ToArrayBuffer(cred.credentialId),
+      //     type: "public-key",
+      //     transports: reorderTransports(cred.transports) ?? [
+      //       "internal",
+      //       "hybrid",
+      //       "usb",
+      //       "nfc",
+      //       "ble",
+      //     ],
+      //   })),
+      //   userVerification: "preferred",
+      // };
+      console.log({ options });
+      const challenge = base64url.decode(options.challenge);
+      if (options.allowCredentials?.length) {
+        options.allowCredentials = options.allowCredentials.map(
+          (cred: any) => ({
+            id: base64url.decode(cred.id),
+            type: "public-key",
+            transports: cred.transports,
+          })
+        );
+      }
+      const decodedOptions = {
+        ...options,
+
+        // hints: opts.hints,
+        challenge,
+      } as PublicKeyCredentialRequestOptions;
+
+      const credential = (await navigator.credentials.get({
+        publicKey: decodedOptions,
+      })) as AuthenticationCredential;
+      // Encode the credential.
+      const rawId = base64url.encode(credential.rawId);
+      const authenticatorData = base64url.encode(
+        credential.response.authenticatorData
+      );
+      const clientDataJSON = base64url.encode(
+        credential.response.clientDataJSON
+      );
+      const signature = base64url.encode(credential.response.signature);
+      const userHandle = credential.response.userHandle
+        ? base64url.encode(credential.response.userHandle)
+        : undefined;
+      const clientExtensionResults: AuthenticationExtensionsClientOutputs = {};
+
+      // if `getClientExtensionResults()` is supported, serialize the result.
+      if (credential.getClientExtensionResults) {
+        const extensions: AuthenticationExtensionsClientOutputs =
+          credential.getClientExtensionResults();
+        if (extensions.credProps) {
+          clientExtensionResults.credProps = extensions.credProps;
+        }
+      }
+
+      const encodedCredential = {
+        id: credential.id,
+        rawId,
+        response: {
+          authenticatorData,
+          clientDataJSON,
+          signature,
+          userHandle,
+        },
+        type: credential.type,
+        clientExtensionResults,
+      } as AuthenticationResponseJSON;
+
+      const parsedCredential = await parseAuthenticationCredential(credential);
+
+      console.log("[AuthenticationResponseJSON]", parsedCredential);
+
+      // Verify and store the credential.
       const verificationResponse = await fetch(
         urlJoin(baseUrl, "/auth/verify-signature"),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            credential: encodedCredential,
             userId: email,
-            credentialId: assertion.id,
-            clientDataJSON: arrayBufferToBase64(
-              assertion.response.clientDataJSON
-            ),
-            authenticatorData: arrayBufferToBase64(
-              (assertion.response as AuthenticatorAssertionResponse)
-                .authenticatorData
-            ),
-            signature: arrayBufferToBase64(
-              (assertion.response as AuthenticatorAssertionResponse).signature
-            ),
           }),
         }
       );
+      // const verificationResponse = await fetch(
+      //   urlJoin(baseUrl, "/auth/verify-signature"),
+      //   {
+      //     method: "POST",
+      //     headers: { "Content-Type": "application/json" },
+      //     body: JSON.stringify({
+      //       userId: email,
+      //       credentialId: assertion.id,
+      //       clientDataJSON: arrayBufferToBase64(
+      //         assertion.response.clientDataJSON
+      //       ),
+      //       authenticatorData: arrayBufferToBase64(
+      //         (assertion.response as AuthenticatorAssertionResponse)
+      //           .authenticatorData
+      //       ),
+      //       signature: arrayBufferToBase64(
+      //         (assertion.response as AuthenticatorAssertionResponse).signature
+      //       ),
+      //     }),
+      //   }
+      // );
 
       setStatus(
         verificationResponse.ok
@@ -194,6 +289,86 @@ function App() {
       setStatus(`Error: ${error.message}`);
       handleRequestOTP();
     }
+  }
+
+  async function parseAuthenticationCredential(
+    cred: AuthenticationCredential
+  ): Promise<any> {
+    const userHandle = cred.response.userHandle
+      ? base64url.encode(cred.response.userHandle)
+      : undefined;
+
+    const credJSON = {
+      id: cred.id,
+      rawId: cred.id,
+      type: cred.type,
+      response: {
+        clientDataJSON: {},
+        authenticatorData: {},
+        signature: base64url.encode(cred.response.signature),
+        userHandle,
+      },
+      clientExtensionResults: {},
+    };
+
+    const decoder = new TextDecoder("utf-8");
+    credJSON.response.clientDataJSON = JSON.parse(
+      decoder.decode(cred.response.clientDataJSON)
+    );
+    credJSON.response.authenticatorData = await parseAuthenticatorData(
+      new Uint8Array(cred.response.authenticatorData)
+    );
+
+    credJSON.clientExtensionResults = parseClientExtensionResults(cred);
+
+    return credJSON;
+  }
+
+  async function parseAuthenticatorData(buffer: any): Promise<any> {
+    const authData = {
+      rpIdHash: "",
+      flags: {
+        up: false,
+        uv: false,
+        be: false,
+        bs: false,
+        at: false,
+        ed: false,
+      },
+    };
+
+    const rpIdHash = buffer.slice(0, 32);
+    buffer = buffer.slice(32);
+    authData.rpIdHash = [...rpIdHash]
+      .map((x) => x.toString(16).padStart(2, "0"))
+      .join("");
+
+    const flags = buffer.slice(0, 1)[0];
+    buffer = buffer.slice(1);
+    authData.flags = {
+      up: !!(flags & (1 << 0)),
+      uv: !!(flags & (1 << 2)),
+      be: !!(flags & (1 << 3)),
+      bs: !!(flags & (1 << 4)),
+      at: !!(flags & (1 << 6)),
+      ed: !!(flags & (1 << 7)),
+    };
+
+    return authData;
+  }
+
+  function parseClientExtensionResults(
+    credential: RegistrationCredential | AuthenticationCredential
+  ): AuthenticationExtensionsClientOutputs {
+    const clientExtensionResults: AuthenticationExtensionsClientOutputs = {};
+    if (credential.getClientExtensionResults) {
+      const extensions: AuthenticationExtensionsClientOutputs =
+        credential.getClientExtensionResults();
+      if (extensions.credProps) {
+        clientExtensionResults.credProps = extensions.credProps;
+      }
+    }
+    return clientExtensionResults;
   }
 
   async function handleRequestOTP() {
