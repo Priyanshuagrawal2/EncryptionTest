@@ -1,3 +1,10 @@
+import {
+  CredentialDeviceType,
+  PublicKeyCredentialCreationOptionsJSON,
+  PublicKeyCredentialRequestOptionsJSON,
+  AuthenticatorTransportFuture,
+} from "@simplewebauthn/types";
+
 export function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binaryString = atob(base64);
 
@@ -39,3 +46,22 @@ export function decodeAttestationData(attestationObject: ArrayBuffer): any {
     attestedCredentialData,
   };
 }
+
+export interface WebAuthnAuthenticationObject
+  extends Omit<PublicKeyCredentialRequestOptionsJSON, "challenge"> {
+  hints?: string[];
+  customTimeout?: number;
+  abortTimeout?: number;
+}
+
+export interface WebAuthnRegistrationObject
+  extends Omit<
+    PublicKeyCredentialCreationOptionsJSON,
+    "rp" | "pubKeyCredParams" | "challenge" | "excludeCredentials"
+  > {
+  hints?: string[];
+  credentialsToExclude?: string[];
+  customTimeout?: number;
+  abortTimeout?: number;
+}
+export const $: any = document.querySelector.bind(document);

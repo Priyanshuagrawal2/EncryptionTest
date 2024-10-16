@@ -1,8 +1,25 @@
-import { arrayBufferToBase64, base64ToArrayBuffer } from "./util/util";
+import {
+  arrayBufferToBase64,
+  base64ToArrayBuffer,
+  WebAuthnAuthenticationObject,
+  WebAuthnRegistrationObject,
+  $,
+} from "./util/util";
 import { useEffect, useState } from "react";
 import axios from "axios";
 import OTPModal from "./components/OTPModal";
 import urlJoin from "url-join";
+import { base64url } from "./util/base64url";
+import {
+  RegistrationCredential,
+  RegistrationResponseJSON,
+  AuthenticationCredential,
+  AuthenticationResponseJSON,
+  PublicKeyCredentialCreationOptions,
+  PublicKeyCredentialCreationOptionsJSON,
+  PublicKeyCredentialRequestOptions,
+  PublicKeyCredentialRequestOptionsJSON,
+} from "@simplewebauthn/types";
 
 export type UserCreds = {
   credentialId: string;
@@ -20,34 +37,54 @@ function App() {
   const [isOTPModalOpen, setIsOTPModalOpen] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
 
-  async function handleCreateCredential(challenge: string) {
+  async function handleCreateCredential() {
     setStatus("Creating credential...");
-    const publicKeyOptions: PublicKeyCredentialCreationOptions = {
-      challenge: base64ToArrayBuffer(challenge),
-      rp: { name: "Codilytics" },
-      user: {
-        id: Uint8Array.from(username, (c) => c.charCodeAt(0)),
-        name: email,
-        displayName: username,
-      },
+    const response = await axios.post(
+      urlJoin(baseUrl, "/auth/get-register-options")
+    );
+    const { options } = response.data;
 
-      pubKeyCredParams: [
-        { alg: -7, type: "public-key" }, // ES256
-        { alg: -257, type: "public-key" }, // RS256
-      ],
-      authenticatorSelection: {
-        userVerification: "preferred",
-        residentKey: "required",
-        // authenticatorAttachment: "cross-platform",
-      },
-      attestation: "direct",
-      timeout: 30000,
-    };
+    const user = {
+      ...options.user,
+      id: base64url.decode(options.user.id),
+    } as PublicKeyCredentialUserEntity;
+    const challenge = base64url.decode(options.challenge);
+
+    const decodedOptions = {
+      ...options,
+      user,
+      challenge,
+    } as PublicKeyCredentialCreationOptions;
+
+    console.log("[CredentialCreationOptions]", decodedOptions);
+    // const publicKeyOptions: PublicKeyCredentialCreationOptions = {
+    //   challenge: base64ToArrayBuffer(challenge),
+    //   rp: { name: "Codilytics" },
+    //   user: {
+    //     id: Uint8Array.from(username, (c) => c.charCodeAt(0)),
+    //     name: email,
+    //     displayName: username,
+    //   },
+
+    //   pubKeyCredParams: [
+    //     { alg: -7, type: "public-key" }, // ES256
+    //     { alg: -257, type: "public-key" }, // RS256
+    //   ],
+    //   authenticatorSelection: {
+    //     userVerification: "preferred",
+    //     residentKey: "required",
+    //     // authenticatorAttachment: "cross-platform",
+    //   },
+    //   attestation: "direct",
+    //   timeout: 30000,
+    // };
 
     try {
+      // Create a new attestation.
       const credential = (await navigator.credentials.create({
-        publicKey: publicKeyOptions,
-      })) as any;
+        publicKey: decodedOptions,
+      })) as RegistrationCredential;
+      console.log(credential);
       const attestationResponse =
         credential.response as AuthenticatorAttestationResponse;
       const attestationAlgorithm = attestationResponse.getPublicKeyAlgorithm();
@@ -186,7 +223,7 @@ function App() {
       if (response.data.success) {
         setIsOTPModalOpen(false);
         setStatus("OTP verified successfully. Creating credential...");
-        handleCreateCredential(response.data.challenge);
+        handleCreateCredential();
       } else {
         setStatus("Invalid OTP. Please try again.");
       }

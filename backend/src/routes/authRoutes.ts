@@ -7,6 +7,7 @@ const router = express.Router();
 router.post("/get-credentials", authController.getCredentials);
 router.post("/set-credentials", authController.setCredentials);
 router.post("/verify-signature", authController.verifySignature);
+router.post("/get-register-options", authController.getRegisterOptions);
 
 // New OTP routes
 router.post("/request-otp", authController.requestOTP);

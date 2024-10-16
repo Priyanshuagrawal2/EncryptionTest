@@ -1,12 +1,42 @@
 import cache from "../utils/cache";
 import { Request, Response } from "express";
 import { base64ToArrayBuffer } from "../utils/utils";
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import * as asn1js from "asn1js";
 const { subtle } = require("crypto").webcrypto;
 import { generateOTP, verifyOTP } from "../utils/otpUtils";
 import { sendOTP } from "../utils/emailUtils";
+import { generateRegistrationOptions } from "@simplewebauthn/server";
 
+export async function getRegisterOptions(req: Request, res: Response) {
+  const encoder = new TextEncoder();
+  const name = "Unnamed User";
+  const displayName = "Unnamed User";
+  const data = encoder.encode(`${name}${displayName}`);
+  const userId = createHash("sha256").update(data).digest();
+  const options = await generateRegistrationOptions({
+    rpName: "RP_NAME",
+    userID: userId,
+    userName: "user.name",
+    userDisplayName: "user.displayName",
+    rpID: "localhost",
+    timeout: 6000,
+    // Prompt users for additional information about the authenticator.
+    attestationType: "none",
+    // Prevent users from re-registering existing authenticators
+    // excludeCredentials,
+    authenticatorSelection: { userVerification: "required" },
+    // extensions,
+  });
+  return res.json({ options });
+}
+
+/**
+ * Retrieves user credentials and generates a challenge.
+ * @param {Request} req - Express request object containing userId in the body.
+ * @param {Response} res - Express response object.
+ * @returns {void}
+ */
 export const getCredentials = (req: Request, res: Response) => {
   const { userId } = req.body;
   const credentials = cache.get<UserCreds[]>(userId);
@@ -22,6 +52,12 @@ export type UserCreds = {
   transports: string;
 };
 
+/**
+ * Stores user credentials in the cache.
+ * @param {Request} req - Express request object containing userId and creds in the body.
+ * @param {Response} res - Express response object.
+ * @returns {void}
+ */
 export const setCredentials = (req: Request, res: Response) => {
   const { userId, creds } = req.body;
   let existingCreds = cache.get<UserCreds[]>(userId);
@@ -34,7 +70,10 @@ export const setCredentials = (req: Request, res: Response) => {
   res.json({ success: true });
 };
 
-function derToRawECDSASignature(derSig: ArrayBuffer) {
+/**
+ * Converts a DER-encoded ECDSA signature to raw format.
+ */
+function derToRawECDSASignature(derSig: ArrayBuffer): Uint8Array {
   const signature = asn1js.fromBER(derSig);
 
   if ((signature.result.valueBlock as any).value.length !== 2) {
@@ -69,6 +108,12 @@ function derToRawECDSASignature(derSig: ArrayBuffer) {
   return rawSignature;
 }
 
+/**
+ * Verifies the signature provided by the client.
+ * @param {Request} req - Express request object containing signature data.
+ * @param {Response} res - Express response object.
+ * @returns {Promise<void>}
+ */
 export async function verifySignature(req: Request, res: Response) {
   try {
     const {
@@ -136,7 +181,16 @@ export async function verifySignature(req: Request, res: Response) {
   }
 }
 
-async function importPublicKey(publicKeyBuffer: ArrayBuffer, alg: number) {
+/**
+ * Imports a public key for verification.
+ * @param {ArrayBuffer} publicKeyBuffer - Public key buffer.
+ * @param {number} alg - Algorithm identifier.
+ * @returns {Promise<CryptoKey>} Imported public key.
+ */
+async function importPublicKey(
+  publicKeyBuffer: ArrayBuffer,
+  alg: number
+): Promise<CryptoKey> {
   if (alg === -257) {
     return await subtle.importKey(
       "spki",
@@ -164,10 +218,13 @@ async function importPublicKey(publicKeyBuffer: ArrayBuffer, alg: number) {
   }
 }
 
+/**
+ * Creates the base for signature verification.
+ */
 function createSignatureBase(
   authDataBuffer: ArrayBuffer,
   clientDataHash: ArrayBuffer
-) {
+): Uint8Array {
   const signatureBase = new Uint8Array(
     authDataBuffer.byteLength + clientDataHash.byteLength
   );
@@ -176,12 +233,15 @@ function createSignatureBase(
   return signatureBase;
 }
 
+/**
+ * Verifies the signature using the public key.
+ */
 async function verifySignatureWithPublicKey(
   publicKeyObj: CryptoKey,
   signatureBuffer: ArrayBuffer,
   signatureBase: Uint8Array,
   alg: number
-) {
+): Promise<boolean> {
   let algorithm = {};
   if (alg === -257) {
     algorithm = { name: "RSASSA-PKCS1-v1_5" };
@@ -198,30 +258,46 @@ async function verifySignatureWithPublicKey(
   );
 }
 
+/**
+ * Validates the challenge in the client data.
+ */
 async function validateChallenge(
   challenge: string,
   clientDataBuffer: ArrayBuffer
-) {
+): Promise<boolean> {
   const parsedClientData = JSON.parse(Buffer.from(clientDataBuffer).toString());
   return compareBase64Strings(parsedClientData.challenge, challenge!);
 }
-const base64ToStandard = (str: string) => {
+
+/**
+ * Converts URL-safe Base64 to standard Base64.
+ */
+function base64ToStandard(str: string): string {
   // Convert URL-safe Base64 to standard Base64
   return str.replace(/_/g, "/").replace(/-/g, "+");
-};
+}
 
-const decodeBase64 = (str: string) => {
+/**
+ * Decodes a Base64 string to UTF-8.
+ */
+function decodeBase64(str: string): string {
   // Decode Base64 string
   return Buffer.from(str, "base64").toString("utf-8");
-};
+}
 
-const compareBase64Strings = (str1: string, str2: string) => {
+/**
+ * Compares two Base64 strings after decoding.
+ */
+function compareBase64Strings(str1: string, str2: string): boolean {
   const decodedStr1 = decodeBase64(base64ToStandard(str1));
   const decodedStr2 = decodeBase64(base64ToStandard(str2));
   return decodedStr1 === decodedStr2;
-};
+}
 
-export const requestOTP = async (req: Request, res: Response) => {
+/**
+ * Generates and sends an OTP to the provided email.
+ */
+export async function requestOTP(req: Request, res: Response) {
   const { email } = req.body;
 
   if (!email) {
@@ -238,8 +314,14 @@ export const requestOTP = async (req: Request, res: Response) => {
     console.error("Error sending OTP:", error);
     res.status(500).json({ error: "Failed to send OTP" });
   }
-};
+}
 
+/**
+ * Verifies the OTP and creates a credential challenge if valid.
+ * @param {Request} req - Express request object containing email and OTP in the body.
+ * @param {Response} res - Express response object.
+ * @returns {Promise<void>}
+ */
 export const verifyOTPAndCreateCredential = async (
   req: Request,
   res: Response
