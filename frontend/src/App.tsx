@@ -57,27 +57,6 @@ function App() {
     } as PublicKeyCredentialCreationOptions;
 
     console.log("[CredentialCreationOptions]", decodedOptions);
-    // const publicKeyOptions: PublicKeyCredentialCreationOptions = {
-    //   challenge: base64ToArrayBuffer(challenge),
-    //   rp: { name: "Codilytics" },
-    //   user: {
-    //     id: Uint8Array.from(username, (c) => c.charCodeAt(0)),
-    //     name: email,
-    //     displayName: username,
-    //   },
-
-    //   pubKeyCredParams: [
-    //     { alg: -7, type: "public-key" }, // ES256
-    //     { alg: -257, type: "public-key" }, // RS256
-    //   ],
-    //   authenticatorSelection: {
-    //     userVerification: "preferred",
-    //     residentKey: "required",
-    //     // authenticatorAttachment: "cross-platform",
-    //   },
-    //   attestation: "direct",
-    //   timeout: 30000,
-    // };
 
     try {
       // Create a new attestation.
@@ -128,7 +107,7 @@ function App() {
       const response = await fetch(urlJoin(baseUrl, "/auth/set-credentials"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credential, userId: email }),
+        body: JSON.stringify({ credential: encodedCredential, userId: email }),
       });
 
       setStatus(
@@ -143,49 +122,12 @@ function App() {
 
   async function handleGetCredential() {
     try {
-      // const response = await axios.post<{
-      //   credentials: UserCreds[];
-      //   challenge: string;
-      // }>(urlJoin(baseUrl, "/auth/get-credentials"), {
-      //   userId: email,
-      // });
-
-      // const { credentials } = response.data;
-      // console.log(credentials);
-      // if (!credentials) {
-      //   handleRequestOTP();
-      //   return;
-      // }
-      const reorderTransports = (
-        transports: AuthenticatorTransport[] = []
-      ): AuthenticatorTransport[] => {
-        if (transports.includes("internal")) {
-          return ["internal", ...transports.filter((t) => t !== "internal")];
-        }
-        return transports;
-      };
-
       const res = await axios.post(urlJoin(baseUrl, "/auth/get-auth-options"), {
         userId: email,
       });
       const { options } = res.data;
-      // const publicKeyOptions: PublicKeyCredentialRequestOptions = {
-      //   challenge: base64ToArrayBuffer(challenge),
-      //   allowCredentials: credentials.map((cred) => ({
-      //     id: base64ToArrayBuffer(cred.credentialId),
-      //     type: "public-key",
-      //     transports: reorderTransports(cred.transports) ?? [
-      //       "internal",
-      //       "hybrid",
-      //       "usb",
-      //       "nfc",
-      //       "ble",
-      //     ],
-      //   })),
-      //   userVerification: "preferred",
-      // };
-      console.log({ options });
-      const challenge = base64url.decode(options.challenge);
+
+      options.challenge = base64url.decode(options.challenge);
       if (options.allowCredentials?.length) {
         options.allowCredentials = options.allowCredentials.map(
           (cred: any) => ({
@@ -194,18 +136,17 @@ function App() {
             transports: cred.transports,
           })
         );
+      } else {
+        handleRequestOTP();
+        return;
       }
-      const decodedOptions = {
-        ...options,
 
-        // hints: opts.hints,
-        challenge,
-      } as PublicKeyCredentialRequestOptions;
+      const decodedOptions = options as PublicKeyCredentialRequestOptions;
 
       const credential = (await navigator.credentials.get({
         publicKey: decodedOptions,
       })) as AuthenticationCredential;
-      // Encode the credential.
+
       const rawId = base64url.encode(credential.rawId);
       const authenticatorData = base64url.encode(
         credential.response.authenticatorData
@@ -219,7 +160,6 @@ function App() {
         : undefined;
       const clientExtensionResults: AuthenticationExtensionsClientOutputs = {};
 
-      // if `getClientExtensionResults()` is supported, serialize the result.
       if (credential.getClientExtensionResults) {
         const extensions: AuthenticationExtensionsClientOutputs =
           credential.getClientExtensionResults();

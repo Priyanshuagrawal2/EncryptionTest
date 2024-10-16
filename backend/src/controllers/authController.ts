@@ -56,25 +56,6 @@ export async function getRegisterOptions(req: Request, res: Response) {
   return res.json({ options });
 }
 
-export async function verifyNew(req: Request, res: Response) {
-  const credential = req.body as RegistrationResponseJSON;
-
-  const expectedChallenge = cache.get<string>("challenge")!;
-  const expectedRPID = "localhost";
-  let expectedOrigin = getOrigin(
-    "http://localhost:3002",
-    req.get("User-Agent")
-  );
-  const verification = await verifyRegistrationResponse({
-    response: credential,
-    expectedChallenge,
-    expectedOrigin,
-    expectedRPID,
-    // Since this is testing the client, verifying the UV flag here doesn't matter.
-    requireUserVerification: false,
-  });
-}
-
 /**
  * Retrieves user credentials and generates a challenge.
  * @param {Request} req - Express request object containing userId in the body.
@@ -123,14 +104,14 @@ export const setCredentials = async (req: Request, res: Response) => {
     "http://localhost:5173",
     req.get("User-Agent")
   );
-
+  console.log({ expectedChallenge, expectedRPID, expectedOrigin, credential });
   const verification = await verifyRegistrationResponse({
     response: credential,
     expectedChallenge,
     expectedOrigin,
     expectedRPID,
     // Since this is testing the client, verifying the UV flag here doesn't matter.
-    requireUserVerification: false,
+    requireUserVerification: true,
   });
   const { verified, registrationInfo } = verification;
   console.log({ registrationInfo });
@@ -282,7 +263,7 @@ export async function verifySignature(req: Request, res: Response) {
       expectedRPID,
       credential,
       // Since this is testing the client, verifying the UV flag here doesn't matter.
-      requireUserVerification: false,
+      requireUserVerification: true,
     });
 
     const { verified, authenticationInfo } = verification;
@@ -351,42 +332,6 @@ function createSignatureBase(
   signatureBase.set(new Uint8Array(authDataBuffer), 0);
   signatureBase.set(new Uint8Array(clientDataHash), authDataBuffer.byteLength);
   return signatureBase;
-}
-
-/**
- * Verifies the signature using the public key.
- */
-async function verifySignatureWithPublicKey(
-  publicKeyObj: CryptoKey,
-  signatureBuffer: ArrayBuffer,
-  signatureBase: Uint8Array,
-  alg: number
-): Promise<boolean> {
-  let algorithm = {};
-  if (alg === -257) {
-    algorithm = { name: "RSASSA-PKCS1-v1_5" };
-  } else if (alg === -7) {
-    signatureBuffer = derToRawECDSASignature(signatureBuffer);
-    algorithm = { name: "ECDSA", hash: { name: "SHA-256" } };
-  }
-
-  return await subtle.verify(
-    algorithm,
-    publicKeyObj,
-    signatureBuffer,
-    signatureBase
-  );
-}
-
-/**
- * Validates the challenge in the client data.
- */
-async function validateChallenge(
-  challenge: string,
-  clientDataBuffer: ArrayBuffer
-): Promise<boolean> {
-  const parsedClientData = JSON.parse(Buffer.from(clientDataBuffer).toString());
-  return compareBase64Strings(parsedClientData.challenge, challenge!);
 }
 
 /**
