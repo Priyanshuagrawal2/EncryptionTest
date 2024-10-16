@@ -1,33 +1,19 @@
 import cache from "../utils/cache";
-import express, { Request, Response } from "express";
-import { base64ToArrayBuffer, getOrigin } from "../utils/utils";
+import { Request, Response } from "express";
+import { getOrigin } from "../utils/utils";
 import { createHash, randomBytes } from "crypto";
-import * as asn1js from "asn1js";
-const { subtle } = require("crypto").webcrypto;
 import { generateOTP, verifyOTP } from "../utils/otpUtils";
 import { sendOTP } from "../utils/emailUtils";
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
   verifyAuthenticationResponse,
-  VerifyAuthenticationResponseOpts,
   verifyRegistrationResponse,
 } from "@simplewebauthn/server";
 import { isoBase64URL } from "@simplewebauthn/server/helpers";
-import {
-  AuthenticationResponseJSON,
-  AuthenticatorSelectionCriteria,
-  AuthenticatorDevice,
-  AttestationConveyancePreference,
-  PublicKeyCredentialParameters,
-  PublicKeyCredentialUserEntityJSON,
-  AuthenticatorTransportFuture,
-} from "@simplewebauthn/types";
-import {
-  RegistrationResponseJSON,
-  WebAuthnCredential,
-} from "@simplewebauthn/server/script/deps";
-import { config } from "node:process";
+import { AuthenticatorTransportFuture } from "@simplewebauthn/types";
+import { WebAuthnCredential } from "@simplewebauthn/server/script/deps";
+
 const WEBAUTHN_TIMEOUT = 1000 * 60 * 5; // 5 minutes
 
 export async function getRegisterOptions(req: Request, res: Response) {
@@ -36,12 +22,13 @@ export async function getRegisterOptions(req: Request, res: Response) {
   const displayName = "Unnamed User";
   const data = encoder.encode(`${name}${displayName}`);
   const userId = createHash("sha256").update(data).digest();
+  const rpID = process.env.RP_ID || "localhost";
   const options = await generateRegistrationOptions({
-    rpName: "RP_NAME",
+    rpName: process.env.RP_NAME || "Your Application Name",
     userID: userId,
     userName: "user.name",
     userDisplayName: "user.displayName",
-    rpID: "localhost",
+    rpID,
     timeout: 6000,
     // Prompt users for additional information about the authenticator.
     attestationType: "none",
@@ -96,25 +83,21 @@ export type UserCreds = {
  */
 export const setCredentials = async (req: Request, res: Response) => {
   const { credential, userId } = req.body;
-  console.log(req.body);
 
   const expectedChallenge = cache.get<string>("challenge")!;
-  const expectedRPID = "localhost";
+  const expectedRPID = process.env.RP_ID || "localhost";
   let expectedOrigin = getOrigin(
     "http://localhost:5173",
     req.get("User-Agent")
   );
-  console.log({ expectedChallenge, expectedRPID, expectedOrigin, credential });
   const verification = await verifyRegistrationResponse({
     response: credential,
     expectedChallenge,
     expectedOrigin,
     expectedRPID,
-    // Since this is testing the client, verifying the UV flag here doesn't matter.
     requireUserVerification: true,
   });
   const { verified, registrationInfo } = verification;
-  console.log({ registrationInfo });
   if (!verified || !registrationInfo) {
     throw new Error("User verification failed.");
   }
@@ -137,78 +120,35 @@ export const setCredentials = async (req: Request, res: Response) => {
     counter,
     registered: new Date().getTime(),
     user_verifying: registrationInfo.userVerified,
-    authenticatorAttachment: "undefined",
     credentialDeviceType,
     credentialBackedUp,
-    browser: req.get("User-Agent"),
-    os: req.get("User-Agent"),
-    platform: req.get("User-Agent"),
     transports,
     clientExtensionResults,
   };
-  // cache.set("publicKey", base64PublicKey);
-  // const { userId, creds } = req.body;
+
   let existingCreds = cache.get<UserCreds[]>(userId);
   if (existingCreds?.length) {
     existingCreds.push(creds as UserCreds);
   } else {
     existingCreds = [creds as UserCreds];
   }
-  cache.set("userId", existingCreds);
+
+  cache.set(userId, existingCreds);
   res.json({ success: true });
 };
 
-/**
- * Converts a DER-encoded ECDSA signature to raw format.
- */
-function derToRawECDSASignature(derSig: ArrayBuffer): Uint8Array {
-  const signature = asn1js.fromBER(derSig);
-
-  if ((signature.result.valueBlock as any).value.length !== 2) {
-    throw new Error("Invalid ECDSA DER signature format");
-  }
-
-  let r = new Uint8Array(
-    (signature.result.valueBlock as any).value[0].valueBlock.valueHex
-  );
-  let s = new Uint8Array(
-    (signature.result.valueBlock as any).value[1].valueBlock.valueHex
-  );
-
-  // Handle leading zero padding in r and s
-  if (r.length === 33 && r[0] === 0) {
-    r = r.slice(1); // Remove the leading zero
-  }
-  if (s.length === 33 && s[0] === 0) {
-    s = s.slice(1); // Remove the leading zero
-  }
-
-  // Ensure r and s are both 32 bytes
-  const rPadding = new Uint8Array(32 - r.length).fill(0);
-  const sPadding = new Uint8Array(32 - s.length).fill(0);
-
-  const rawSignature = new Uint8Array(64);
-  rawSignature.set(rPadding, 0);
-  rawSignature.set(r, 32 - r.length);
-  rawSignature.set(sPadding, 32);
-  rawSignature.set(s, 64 - s.length);
-
-  return rawSignature;
-}
-
 export async function getAuthOptions(req: Request, res: Response) {
-  const creds = cache.get<UserCreds[]>("userId")!;
-  console.log({ creds });
+  const { userId } = req.body;
+  const creds = cache.get<UserCreds[]>(userId)!;
   const allowCredentials = creds?.map((c) => ({
     id: c.credentialID!,
     transports: c.transports! as unknown as AuthenticatorTransportFuture[],
   }));
-  console.log(allowCredentials);
   const options = await generateAuthenticationOptions({
     timeout: 6000,
     allowCredentials,
     userVerification: "required",
-    rpID: "localhost",
+    rpID: process.env.RP_ID || "localhost",
   });
   cache.set("challenge", options.challenge);
   cache.set("timeout", new Date().getTime() + WEBAUTHN_TIMEOUT);
@@ -223,7 +163,7 @@ export async function getAuthOptions(req: Request, res: Response) {
  */
 export async function verifySignature(req: Request, res: Response) {
   const expectedChallenge = cache.get<string>("challenge")!;
-  const expectedRPID = "localhost";
+  const expectedRPID = process.env.RP_ID || "localhost";
   const expectedOrigin = getOrigin(
     "http://localhost:5173",
     req.get("User-Agent")
@@ -232,8 +172,7 @@ export async function verifySignature(req: Request, res: Response) {
   try {
     const { credential: claimedCred, userId } = req.body;
 
-    const credentials = cache.get<UserCreds[]>("userId")!;
-    console.log({ credentials, claimedCred });
+    const credentials = cache.get<UserCreds[]>(userId)!;
     let storedCred = credentials.find(
       (cred) => cred.credentialID === claimedCred.id
     );
@@ -252,9 +191,6 @@ export async function verifySignature(req: Request, res: Response) {
       counter,
       transports: transports as unknown as AuthenticatorTransportFuture[],
     };
-
-    console.log("Claimed credential", claimedCred);
-    console.log("Stored credential", storedCred);
 
     const verification = await verifyAuthenticationResponse({
       response: claimedCred,
@@ -281,84 +217,6 @@ export async function verifySignature(req: Request, res: Response) {
     return res.status(400).json({ status: false, error: error.message });
   }
 }
-
-/**
- * Imports a public key for verification.
- * @param {ArrayBuffer} publicKeyBuffer - Public key buffer.
- * @param {number} alg - Algorithm identifier.
- * @returns {Promise<CryptoKey>} Imported public key.
- */
-async function importPublicKey(
-  publicKeyBuffer: ArrayBuffer,
-  alg: number
-): Promise<CryptoKey> {
-  if (alg === -257) {
-    return await subtle.importKey(
-      "spki",
-      publicKeyBuffer,
-      {
-        name: "RSASSA-PKCS1-v1_5",
-        hash: { name: "SHA-256" },
-      },
-      false,
-      ["verify"]
-    );
-  } else if (alg === -7) {
-    return await subtle.importKey(
-      "spki",
-      publicKeyBuffer,
-      {
-        name: "ECDSA",
-        namedCurve: "P-256",
-      },
-      false,
-      ["verify"]
-    );
-  } else {
-    throw new Error(`Unsupported algorithm: ${alg}`);
-  }
-}
-
-/**
- * Creates the base for signature verification.
- */
-function createSignatureBase(
-  authDataBuffer: ArrayBuffer,
-  clientDataHash: ArrayBuffer
-): Uint8Array {
-  const signatureBase = new Uint8Array(
-    authDataBuffer.byteLength + clientDataHash.byteLength
-  );
-  signatureBase.set(new Uint8Array(authDataBuffer), 0);
-  signatureBase.set(new Uint8Array(clientDataHash), authDataBuffer.byteLength);
-  return signatureBase;
-}
-
-/**
- * Converts URL-safe Base64 to standard Base64.
- */
-function base64ToStandard(str: string): string {
-  // Convert URL-safe Base64 to standard Base64
-  return str.replace(/_/g, "/").replace(/-/g, "+");
-}
-
-/**
- * Decodes a Base64 string to UTF-8.
- */
-function decodeBase64(str: string): string {
-  // Decode Base64 string
-  return Buffer.from(str, "base64").toString("utf-8");
-}
-
-/**
- * Compares two Base64 strings after decoding.
- */
-function compareBase64Strings(str1: string, str2: string): boolean {
-  const decodedStr1 = decodeBase64(base64ToStandard(str1));
-  const decodedStr2 = decodeBase64(base64ToStandard(str2));
-  return decodedStr1 === decodedStr2;
-}
-
 /**
  * Generates and sends an OTP to the provided email.
  */

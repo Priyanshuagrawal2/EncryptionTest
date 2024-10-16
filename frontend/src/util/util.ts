@@ -1,9 +1,10 @@
 import {
-  CredentialDeviceType,
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
-  AuthenticatorTransportFuture,
+  RegistrationCredential,
+  AuthenticationCredential,
 } from "@simplewebauthn/types";
+import { base64url } from "./base64url";
 
 export function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binaryString = atob(base64);
@@ -97,3 +98,83 @@ export const getOrigin = (_origin: string, userAgent?: string): string => {
 
   return origin;
 };
+
+export async function parseAuthenticationCredential(
+  cred: AuthenticationCredential
+): Promise<any> {
+  const userHandle = cred.response.userHandle
+    ? base64url.encode(cred.response.userHandle)
+    : undefined;
+
+  const credJSON = {
+    id: cred.id,
+    rawId: cred.id,
+    type: cred.type,
+    response: {
+      clientDataJSON: {},
+      authenticatorData: {},
+      signature: base64url.encode(cred.response.signature),
+      userHandle,
+    },
+    clientExtensionResults: {},
+  };
+
+  const decoder = new TextDecoder("utf-8");
+  credJSON.response.clientDataJSON = JSON.parse(
+    decoder.decode(cred.response.clientDataJSON)
+  );
+  credJSON.response.authenticatorData = await parseAuthenticatorData(
+    new Uint8Array(cred.response.authenticatorData)
+  );
+
+  credJSON.clientExtensionResults = parseClientExtensionResults(cred);
+
+  return credJSON;
+}
+
+async function parseAuthenticatorData(buffer: any): Promise<any> {
+  const authData = {
+    rpIdHash: "",
+    flags: {
+      up: false,
+      uv: false,
+      be: false,
+      bs: false,
+      at: false,
+      ed: false,
+    },
+  };
+
+  const rpIdHash = buffer.slice(0, 32);
+  buffer = buffer.slice(32);
+  authData.rpIdHash = [...rpIdHash]
+    .map((x) => x.toString(16).padStart(2, "0"))
+    .join("");
+
+  const flags = buffer.slice(0, 1)[0];
+  buffer = buffer.slice(1);
+  authData.flags = {
+    up: !!(flags & (1 << 0)),
+    uv: !!(flags & (1 << 2)),
+    be: !!(flags & (1 << 3)),
+    bs: !!(flags & (1 << 4)),
+    at: !!(flags & (1 << 6)),
+    ed: !!(flags & (1 << 7)),
+  };
+
+  return authData;
+}
+
+function parseClientExtensionResults(
+  credential: RegistrationCredential | AuthenticationCredential
+): AuthenticationExtensionsClientOutputs {
+  const clientExtensionResults: AuthenticationExtensionsClientOutputs = {};
+  if (credential.getClientExtensionResults) {
+    const extensions: AuthenticationExtensionsClientOutputs =
+      credential.getClientExtensionResults();
+    if (extensions.credProps) {
+      clientExtensionResults.credProps = extensions.credProps;
+    }
+  }
+  return clientExtensionResults;
+}
