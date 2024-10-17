@@ -107,3 +107,20 @@ export function getBrowserInfo(userAgent: string) {
     browser: browserName,
   };
 }
+
+export type UserCreds = {
+  user_id: string;
+  credentialID: string;
+  credentialPublicKey: string;
+  aaguid: string;
+  counter: number;
+  registered: number;
+  user_verifying: boolean;
+  authenticatorAttachment: string;
+  credentialDeviceType: string;
+  credentialBackedUp: boolean;
+  browser: string;
+  os: string;
+  transports: string;
+  clientExtensionResults: string;
+};

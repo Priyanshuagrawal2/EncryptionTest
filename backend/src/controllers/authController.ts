@@ -1,6 +1,6 @@
 import cache from "../utils/cache";
 import { Request, Response } from "express";
-import { getBrowserInfo, getOrigin } from "../utils/utils";
+import { getBrowserInfo, getOrigin, UserCreds } from "../utils/utils";
 import { createHash, randomBytes } from "crypto";
 import { generateOTP, verifyOTP } from "../utils/otpUtils";
 import { sendOTP } from "../utils/emailUtils";
@@ -55,43 +55,12 @@ export async function getRegisterOptions(req: Request, res: Response) {
 }
 
 /**
- * Retrieves user credentials and generates a challenge.
- * @param {Request} req - Express request object containing userId in the body.
- * @param {Response} res - Express response object.
- * @returns {void}
- */
-export const getCredentials = (req: Request, res: Response) => {
-  const { userId } = req.body;
-  const credentials = cache.get<UserCreds[]>(userId);
-  const challenge = randomBytes(32).toString("base64");
-  cache.set("challenge", challenge);
-  res.json({ credentials, challenge });
-};
-
-export type UserCreds = {
-  user_id: string;
-  credentialID: string;
-  credentialPublicKey: string;
-  aaguid: string;
-  counter: number;
-  registered: number;
-  user_verifying: boolean;
-  authenticatorAttachment: string;
-  credentialDeviceType: string;
-  credentialBackedUp: boolean;
-  browser: string;
-  os: string;
-  transports: string;
-  clientExtensionResults: string;
-};
-
-/**
  * Stores user credentials in the cache.
  * @param {Request} req - Express request object containing userId and creds in the body.
  * @param {Response} res - Express response object.
  * @returns {void}
  */
-export const setCredentials = async (req: Request, res: Response) => {
+export const registerCredentials = async (req: Request, res: Response) => {
   const { credential, userId } = req.body;
 
   const expectedChallenge = cache.get<string>("challenge")!;
@@ -232,6 +201,7 @@ export async function verifySignature(req: Request, res: Response) {
     return res.status(400).json({ status: false, error: error.message });
   }
 }
+
 /**
  * Generates and sends an OTP to the provided email.
  */

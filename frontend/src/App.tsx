@@ -98,11 +98,17 @@ function App() {
         clientExtensionResults,
       } as RegistrationResponseJSON;
 
-      const response = await fetch(urlJoin(baseUrl, "/auth/set-credentials"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credential: encodedCredential, userId: email }),
-      });
+      const response = await fetch(
+        urlJoin(baseUrl, "/auth/register-credentials"),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            credential: encodedCredential,
+            userId: email,
+          }),
+        }
+      );
 
       setStatus(
         response.ok
