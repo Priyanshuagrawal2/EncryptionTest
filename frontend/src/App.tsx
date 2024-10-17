@@ -1,7 +1,17 @@
-import { arrayBufferToBase64, base64ToArrayBuffer } from "./util/util";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import axios from "axios";
 import OTPModal from "./components/OTPModal";
+import urlJoin from "url-join";
+import { base64url } from "./util/base64url";
+import {
+  RegistrationCredential,
+  RegistrationResponseJSON,
+  AuthenticationCredential,
+  AuthenticationResponseJSON,
+  PublicKeyCredentialCreationOptions,
+  PublicKeyCredentialRequestOptions,
+} from "@simplewebauthn/types";
+import { getBrowserInfo, parseAuthenticationCredential } from "./util/util";
 
 export type UserCreds = {
   credentialId: string;
@@ -10,6 +20,8 @@ export type UserCreds = {
   transports: AuthenticatorTransport[];
 };
 
+const baseUrl = "http://localhost:3002";
+
 function App() {
   const [status, setStatus] = useState<string>("");
   const [username, setUsername] = useState<string>("");
@@ -17,55 +29,83 @@ function App() {
   const [isOTPModalOpen, setIsOTPModalOpen] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
 
-  async function handleCreateCredential(challenge: string) {
+  async function handleCreateCredential() {
     setStatus("Creating credential...");
-    const publicKeyOptions: PublicKeyCredentialCreationOptions = {
-      challenge: base64ToArrayBuffer(challenge),
-      rp: { name: "Codilytics" },
-      user: {
-        id: Uint8Array.from(username, (c) => c.charCodeAt(0)),
-        name: email,
-        displayName: username,
-      },
+    const response = await axios.post(
+      urlJoin(baseUrl, "/auth/get-register-options"),
+      {
+        username,
+        userId: email,
+      }
+    );
+    const { options } = response.data;
 
-      pubKeyCredParams: [
-        { alg: -7, type: "public-key" }, // ES256
-        { alg: -257, type: "public-key" }, // RS256
-      ],
-      authenticatorSelection: {
-        userVerification: "preferred",
-        residentKey: "required",
-        // authenticatorAttachment: "cross-platform",
-      },
-      attestation: "direct",
-      timeout: 30000,
-    };
+    const user = {
+      ...options.user,
+      id: base64url.decode(options.user.id),
+    } as PublicKeyCredentialUserEntity;
+    const challenge = base64url.decode(options.challenge);
+    if (options.excludeCredentials) {
+      options.excludeCredentials = options.excludeCredentials.map(
+        (cred: any) => ({
+          id: base64url.decode(cred.id),
+          type: "public-key",
+          transports: cred.transports,
+        })
+      );
+    }
+    const decodedOptions = {
+      ...options,
+      user,
+      challenge,
+    } as PublicKeyCredentialCreationOptions;
 
     try {
+      // Create a new attestation.
       const credential = (await navigator.credentials.create({
-        publicKey: publicKeyOptions,
-      })) as any;
-      const credentialJSON = credential.toJSON();
-      const encodedCredentialId = arrayBufferToBase64(credential.rawId);
-      const encodedPublicKey = arrayBufferToBase64(
-        (
-          credential.response as AuthenticatorAttestationResponse
-        ).getPublicKey()!
+        publicKey: decodedOptions,
+      })) as RegistrationCredential;
+      const attestationResponse =
+        credential.response as AuthenticatorAttestationResponse;
+      const transports = (attestationResponse as any).getTransports?.() ?? [];
+      const rawId = base64url.encode(credential.rawId);
+      const clientDataJSON = base64url.encode(
+        credential.response.clientDataJSON
       );
+      const attestationObject = base64url.encode(
+        credential.response.attestationObject
+      );
+      const clientExtensionResults: AuthenticationExtensionsClientOutputs = {};
+
+      // if `getClientExtensionResults()` is supported, serialize the result.
+      if (credential.getClientExtensionResults) {
+        const extensions: AuthenticationExtensionsClientOutputs =
+          credential.getClientExtensionResults();
+        if (extensions.credProps) {
+          clientExtensionResults.credProps = extensions.credProps;
+        }
+      }
+
+      const encodedCredential = {
+        id: credential.id,
+        rawId,
+        response: {
+          clientDataJSON,
+          attestationObject,
+          transports,
+        },
+        type: credential.type,
+        clientExtensionResults,
+      } as RegistrationResponseJSON;
 
       const response = await fetch(
-        "https://b5f9-103-176-134-214.ngrok-free.app/auth/set-credentials",
+        urlJoin(baseUrl, "/auth/register-credentials"),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            credential: encodedCredential,
             userId: email,
-            creds: {
-              credentialId: encodedCredentialId,
-              publicKey: encodedPublicKey,
-              algorithm: credentialJSON.response.publicKeyAlgorithm,
-              transports: credentialJSON.response.transports,
-            },
           }),
         }
       );
@@ -82,51 +122,82 @@ function App() {
 
   async function handleGetCredential() {
     try {
-      const response = await axios.post<{
-        credentials: UserCreds[];
-        challenge: string;
-      }>("https://b5f9-103-176-134-214.ngrok-free.app/auth/get-credentials", {
+      const res = await axios.post(urlJoin(baseUrl, "/auth/get-auth-options"), {
         userId: email,
       });
+      const { options } = res.data;
 
-      const { credentials, challenge } = response.data;
-
-      if (!credentials || !challenge) {
+      options.challenge = base64url.decode(options.challenge);
+      if (options.allowCredentials?.length) {
+        // const browserInfo = getBrowserInfo(navigator.userAgent);
+        options.allowCredentials = options.allowCredentials.map((cred: any) => {
+          // if (
+          //   browserInfo.browser == cred.browser &&
+          //   browserInfo.os == cred.os
+          // ) {
+          return {
+            id: base64url.decode(cred.id),
+            type: "public-key",
+            transports: cred.transports,
+          };
+          // }
+        });
+      } else {
         handleRequestOTP();
         return;
       }
 
-      const publicKeyOptions: PublicKeyCredentialRequestOptions = {
-        challenge: base64ToArrayBuffer(challenge),
-        allowCredentials: credentials.map((cred) => ({
-          id: base64ToArrayBuffer(cred.credentialId),
-          type: "public-key",
-          transports: ["internal", "hybrid"],
-        })),
-        userVerification: "preferred",
-      };
-      const assertion = (await navigator.credentials.get({
-        publicKey: publicKeyOptions,
-      })) as PublicKeyCredential;
-      console.log(assertion);
+      const decodedOptions = options as PublicKeyCredentialRequestOptions;
+
+      const credential = (await navigator.credentials.get({
+        publicKey: decodedOptions,
+      })) as AuthenticationCredential;
+
+      const rawId = base64url.encode(credential.rawId);
+      const authenticatorData = base64url.encode(
+        credential.response.authenticatorData
+      );
+      const clientDataJSON = base64url.encode(
+        credential.response.clientDataJSON
+      );
+      const signature = base64url.encode(credential.response.signature);
+      const userHandle = credential.response.userHandle
+        ? base64url.encode(credential.response.userHandle)
+        : undefined;
+      const clientExtensionResults: AuthenticationExtensionsClientOutputs = {};
+
+      if (credential.getClientExtensionResults) {
+        const extensions: AuthenticationExtensionsClientOutputs =
+          credential.getClientExtensionResults();
+        if (extensions.credProps) {
+          clientExtensionResults.credProps = extensions.credProps;
+        }
+      }
+
+      const encodedCredential = {
+        id: credential.id,
+        rawId,
+        response: {
+          authenticatorData,
+          clientDataJSON,
+          signature,
+          userHandle,
+        },
+        type: credential.type,
+        clientExtensionResults,
+      } as AuthenticationResponseJSON;
+
+      const parsedCredential = await parseAuthenticationCredential(credential);
+
+      // Verify and store the credential.
       const verificationResponse = await fetch(
-        "https://b5f9-103-176-134-214.ngrok-free.app/auth/verify-signature",
+        urlJoin(baseUrl, "/auth/verify-signature"),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            credential: encodedCredential,
             userId: email,
-            credentialId: assertion.id,
-            clientDataJSON: arrayBufferToBase64(
-              assertion.response.clientDataJSON
-            ),
-            authenticatorData: arrayBufferToBase64(
-              (assertion.response as AuthenticatorAssertionResponse)
-                .authenticatorData
-            ),
-            signature: arrayBufferToBase64(
-              (assertion.response as AuthenticatorAssertionResponse).signature
-            ),
           }),
         }
       );
@@ -145,12 +216,9 @@ function App() {
 
   async function handleRequestOTP() {
     try {
-      const response = await axios.post(
-        "https://b5f9-103-176-134-214.ngrok-free.app/auth/request-otp",
-        {
-          email,
-        }
-      );
+      const response = await axios.post(urlJoin(baseUrl, "/auth/request-otp"), {
+        email,
+      });
       if (response.data.success) {
         setStatus("OTP sent successfully. Please check your email.");
         setOtpSent(true);
@@ -165,18 +233,15 @@ function App() {
 
   const handleOTPSubmit = async (otp: string) => {
     try {
-      const response = await axios.post(
-        "https://b5f9-103-176-134-214.ngrok-free.app/auth/verify-otp",
-        {
-          email,
-          otp,
-        }
-      );
+      const response = await axios.post(urlJoin(baseUrl, "/auth/verify-otp"), {
+        email,
+        otp,
+      });
 
       if (response.data.success) {
         setIsOTPModalOpen(false);
         setStatus("OTP verified successfully. Creating credential...");
-        handleCreateCredential(response.data.challenge);
+        handleCreateCredential();
       } else {
         setStatus("Invalid OTP. Please try again.");
       }

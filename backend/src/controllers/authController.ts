@@ -1,227 +1,211 @@
 import cache from "../utils/cache";
 import { Request, Response } from "express";
-import { base64ToArrayBuffer } from "../utils/utils";
-import { randomBytes } from "crypto";
-import * as asn1js from "asn1js";
-const { subtle } = require("crypto").webcrypto;
+import { getBrowserInfo, getOrigin, UserCreds } from "../utils/utils";
+import { createHash, randomBytes } from "crypto";
 import { generateOTP, verifyOTP } from "../utils/otpUtils";
 import { sendOTP } from "../utils/emailUtils";
+import {
+  generateAuthenticationOptions,
+  generateRegistrationOptions,
+  verifyAuthenticationResponse,
+  verifyRegistrationResponse,
+} from "@simplewebauthn/server";
+import { isoBase64URL } from "@simplewebauthn/server/helpers";
+import { AuthenticatorTransportFuture } from "@simplewebauthn/types";
+import { WebAuthnCredential } from "@simplewebauthn/server/script/deps";
 
-export const getCredentials = (req: Request, res: Response) => {
-  const { userId } = req.body;
-  const credentials = cache.get<UserCreds[]>(userId);
-  const challenge = randomBytes(32).toString("base64");
-  cache.set("challenge", challenge);
-  res.json({ credentials, challenge });
-};
+const WEBAUTHN_TIMEOUT = 1000 * 60 * 5; // 5 minutes
 
-export type UserCreds = {
-  credentialId: string;
-  publicKey: string;
-  algorithm: string;
-  transports: string;
-};
+export async function getRegisterOptions(req: Request, res: Response) {
+  const { username, userId } = req.body;
+  const encoder = new TextEncoder();
+  const name = userId;
+  const displayName = username;
+  const data = encoder.encode(`${name}${displayName}`);
+  const userIdHash = createHash("sha256").update(data).digest();
+  const rpID = process.env.RP_ID || "localhost";
+  const existingCreds = cache.get<UserCreds[]>(userId);
+  let excludeCredentials: WebAuthnCredential[] = [];
+  if (existingCreds?.length) {
+    excludeCredentials = existingCreds.map((cred) => ({
+      id: cred.credentialID,
+      counter: cred.counter,
+      publicKey: isoBase64URL.toBuffer(cred.credentialPublicKey),
+      transports: cred.transports as unknown as AuthenticatorTransportFuture[],
+    }));
+  }
+  const options = await generateRegistrationOptions({
+    rpName: process.env.RP_NAME || "Your Application Name",
+    userID: userIdHash,
+    userName: userId,
+    userDisplayName: displayName,
+    rpID,
+    timeout: 6000,
+    // Prompt users for additional information about the authenticator.
+    attestationType: "none",
+    // Prevent users from re-registering existing authenticators
+    excludeCredentials,
+    authenticatorSelection: { userVerification: "required" },
+    // extensions,
+  });
+  cache.set("challenge", options.challenge);
+  cache.set("timeout", new Date().getTime() + WEBAUTHN_TIMEOUT);
 
-export const setCredentials = (req: Request, res: Response) => {
-  const { userId, creds } = req.body;
+  return res.json({ options });
+}
+
+/**
+ * Stores user credentials in the cache.
+ * @param {Request} req - Express request object containing userId and creds in the body.
+ * @param {Response} res - Express response object.
+ * @returns {void}
+ */
+export const registerCredentials = async (req: Request, res: Response) => {
+  const { credential, userId } = req.body;
+
+  const expectedChallenge = cache.get<string>("challenge")!;
+  const expectedRPID = process.env.RP_ID || "localhost";
+  let expectedOrigin = getOrigin(
+    "http://localhost:5173",
+    req.get("User-Agent")
+  );
+  const verification = await verifyRegistrationResponse({
+    response: credential,
+    expectedChallenge,
+    expectedOrigin,
+    expectedRPID,
+    requireUserVerification: true,
+  });
+  const { verified, registrationInfo } = verification;
+  if (!verified || !registrationInfo) {
+    throw new Error("User verification failed.");
+  }
+  const {
+    aaguid,
+    credential: { id: credentialID, publicKey: credentialPublicKey, counter },
+    credentialDeviceType,
+    credentialBackedUp,
+  } = registrationInfo;
+  const { response, clientExtensionResults } = credential;
+
+  const transports = response.transports || [];
+
+  const base64PublicKey = isoBase64URL.fromBuffer(credentialPublicKey);
+  const browserInfo = getBrowserInfo(req.get("User-Agent")!);
+  const creds = {
+    user_id: userId,
+    credentialID,
+    credentialPublicKey: base64PublicKey,
+    aaguid,
+    counter,
+    registered: new Date().getTime(),
+    user_verifying: registrationInfo.userVerified,
+    credentialDeviceType,
+    credentialBackedUp,
+    transports,
+    browser: browserInfo.browser,
+    os: browserInfo.os,
+    clientExtensionResults,
+  };
+
   let existingCreds = cache.get<UserCreds[]>(userId);
   if (existingCreds?.length) {
-    existingCreds.push(creds);
+    existingCreds.push(creds as UserCreds);
   } else {
-    existingCreds = [creds];
+    existingCreds = [creds as UserCreds];
   }
+
   cache.set(userId, existingCreds);
   res.json({ success: true });
 };
 
-function derToRawECDSASignature(derSig: ArrayBuffer) {
-  const signature = asn1js.fromBER(derSig);
+export async function getAuthOptions(req: Request, res: Response) {
+  const { userId } = req.body;
+  const creds = cache.get<UserCreds[]>(userId)!;
+  const allowCredentials = creds?.map((c) => ({
+    id: c.credentialID!,
+    browser: c.browser,
+    os: c.os,
+    transports: c.transports! as unknown as AuthenticatorTransportFuture[],
+  }));
 
-  if ((signature.result.valueBlock as any).value.length !== 2) {
-    throw new Error("Invalid ECDSA DER signature format");
-  }
-
-  let r = new Uint8Array(
-    (signature.result.valueBlock as any).value[0].valueBlock.valueHex
-  );
-  let s = new Uint8Array(
-    (signature.result.valueBlock as any).value[1].valueBlock.valueHex
-  );
-
-  // Handle leading zero padding in r and s
-  if (r.length === 33 && r[0] === 0) {
-    r = r.slice(1); // Remove the leading zero
-  }
-  if (s.length === 33 && s[0] === 0) {
-    s = s.slice(1); // Remove the leading zero
-  }
-
-  // Ensure r and s are both 32 bytes
-  const rPadding = new Uint8Array(32 - r.length).fill(0);
-  const sPadding = new Uint8Array(32 - s.length).fill(0);
-
-  const rawSignature = new Uint8Array(64);
-  rawSignature.set(rPadding, 0);
-  rawSignature.set(r, 32 - r.length);
-  rawSignature.set(sPadding, 32);
-  rawSignature.set(s, 64 - s.length);
-
-  return rawSignature;
+  const options = await generateAuthenticationOptions({
+    timeout: 6000,
+    allowCredentials,
+    userVerification: "required",
+    rpID: process.env.RP_ID || "localhost",
+  });
+  cache.set("challenge", options.challenge);
+  cache.set("timeout", new Date().getTime() + WEBAUTHN_TIMEOUT);
+  res.json({ options });
 }
 
+/**
+ * Verifies the signature provided by the client.
+ * @param {Request} req - Express request object containing signature data.
+ * @param {Response} res - Express response object.
+ * @returns {Promise<void>}
+ */
 export async function verifySignature(req: Request, res: Response) {
+  const expectedChallenge = cache.get<string>("challenge")!;
+  const expectedRPID = process.env.RP_ID || "localhost";
+  const expectedOrigin = getOrigin(
+    "http://localhost:5173",
+    req.get("User-Agent")
+  );
+
   try {
-    const {
-      clientDataJSON,
-      authenticatorData,
-      signature,
-      credentialId,
-      userId,
-    } = req.body;
-    const creds = cache.get<UserCreds[]>(userId);
-    if (!creds) {
-      return res.status(400).json({ error: "Credentials not found" });
-    }
-    const cred = creds.find((c) =>
-      compareBase64Strings(c.credentialId, credentialId)
+    const { credential: claimedCred, userId } = req.body;
+
+    const credentials = cache.get<UserCreds[]>(userId)!;
+    let storedCred = credentials.find(
+      (cred) => cred.credentialID === claimedCred.id
     );
-    if (!cred) {
-      return res.status(400).json({ error: "Credential not found" });
-    }
-    const publicKey = cred.publicKey;
-    const algorithm = cred.algorithm;
-    if (!publicKey || !algorithm) {
-      return res.status(400).json({ error: "Public key not found" });
+    if (!storedCred) {
+      throw new Error("Authenticating credential not found.");
     }
 
-    const publicKeyBuffer = base64ToArrayBuffer(publicKey);
-    const publicKeyObj = await importPublicKey(
-      publicKeyBuffer,
-      parseInt(algorithm)
+    const credentialPublicKey = isoBase64URL.toBuffer(
+      storedCred.credentialPublicKey
     );
+    const { counter, transports } = storedCred;
 
-    const clientDataBuffer = base64ToArrayBuffer(clientDataJSON);
-    const clientDataHash = await subtle.digest("SHA-256", clientDataBuffer);
-    const authDataBuffer = base64ToArrayBuffer(authenticatorData);
+    const credential: WebAuthnCredential = {
+      id: storedCred.credentialID,
+      publicKey: credentialPublicKey,
+      counter,
+      transports: transports as unknown as AuthenticatorTransportFuture[],
+    };
 
-    const signatureBase = createSignatureBase(authDataBuffer, clientDataHash);
-    const signatureBuffer = base64ToArrayBuffer(signature);
+    const verification = await verifyAuthenticationResponse({
+      response: claimedCred,
+      expectedChallenge,
+      expectedOrigin,
+      expectedRPID,
+      credential,
+      requireUserVerification: true,
+    });
 
-    const isValid = await verifySignatureWithPublicKey(
-      publicKeyObj,
-      signatureBuffer,
-      signatureBase,
-      parseInt(algorithm)
-    );
+    const { verified, authenticationInfo } = verification;
 
-    if (isValid) {
-      const challenge = cache.get<string>("challenge");
-      if (!challenge) {
-        return res.status(400).json({ error: "Challenge not found" });
-      }
-      const isValidChallenge = await validateChallenge(
-        challenge,
-        clientDataBuffer
-      );
-      if (!isValidChallenge) {
-        return res.status(401).json({ error: "Invalid challenge" });
-      }
-      res.json({ isValid });
-    } else {
-      res.status(401).json({ error: "Invalid signature" });
+    if (!verified) {
+      throw new Error("User verification failed.");
     }
-  } catch (error) {
-    console.error("Error verifying signature:", error);
-    res.status(500).json({ error: "Internal server error" });
+
+    storedCred.counter = authenticationInfo.newCounter;
+
+    return res.json(storedCred);
+  } catch (error: any) {
+    console.error(error);
+
+    return res.status(400).json({ status: false, error: error.message });
   }
 }
 
-async function importPublicKey(publicKeyBuffer: ArrayBuffer, alg: number) {
-  if (alg === -257) {
-    return await subtle.importKey(
-      "spki",
-      publicKeyBuffer,
-      {
-        name: "RSASSA-PKCS1-v1_5",
-        hash: { name: "SHA-256" },
-      },
-      false,
-      ["verify"]
-    );
-  } else if (alg === -7) {
-    return await subtle.importKey(
-      "spki",
-      publicKeyBuffer,
-      {
-        name: "ECDSA",
-        namedCurve: "P-256",
-      },
-      false,
-      ["verify"]
-    );
-  } else {
-    throw new Error(`Unsupported algorithm: ${alg}`);
-  }
-}
-
-function createSignatureBase(
-  authDataBuffer: ArrayBuffer,
-  clientDataHash: ArrayBuffer
-) {
-  const signatureBase = new Uint8Array(
-    authDataBuffer.byteLength + clientDataHash.byteLength
-  );
-  signatureBase.set(new Uint8Array(authDataBuffer), 0);
-  signatureBase.set(new Uint8Array(clientDataHash), authDataBuffer.byteLength);
-  return signatureBase;
-}
-
-async function verifySignatureWithPublicKey(
-  publicKeyObj: CryptoKey,
-  signatureBuffer: ArrayBuffer,
-  signatureBase: Uint8Array,
-  alg: number
-) {
-  let algorithm = {};
-  if (alg === -257) {
-    algorithm = { name: "RSASSA-PKCS1-v1_5" };
-  } else if (alg === -7) {
-    signatureBuffer = derToRawECDSASignature(signatureBuffer);
-    algorithm = { name: "ECDSA", hash: { name: "SHA-256" } };
-  }
-
-  return await subtle.verify(
-    algorithm,
-    publicKeyObj,
-    signatureBuffer,
-    signatureBase
-  );
-}
-
-async function validateChallenge(
-  challenge: string,
-  clientDataBuffer: ArrayBuffer
-) {
-  const parsedClientData = JSON.parse(Buffer.from(clientDataBuffer).toString());
-  return compareBase64Strings(parsedClientData.challenge, challenge!);
-}
-const base64ToStandard = (str: string) => {
-  // Convert URL-safe Base64 to standard Base64
-  return str.replace(/_/g, "/").replace(/-/g, "+");
-};
-
-const decodeBase64 = (str: string) => {
-  // Decode Base64 string
-  return Buffer.from(str, "base64").toString("utf-8");
-};
-
-const compareBase64Strings = (str1: string, str2: string) => {
-  const decodedStr1 = decodeBase64(base64ToStandard(str1));
-  const decodedStr2 = decodeBase64(base64ToStandard(str2));
-  return decodedStr1 === decodedStr2;
-};
-
-export const requestOTP = async (req: Request, res: Response) => {
+/**
+ * Generates and sends an OTP to the provided email.
+ */
+export async function requestOTP(req: Request, res: Response) {
   const { email } = req.body;
 
   if (!email) {
@@ -238,8 +222,14 @@ export const requestOTP = async (req: Request, res: Response) => {
     console.error("Error sending OTP:", error);
     res.status(500).json({ error: "Failed to send OTP" });
   }
-};
+}
 
+/**
+ * Verifies the OTP and creates a credential challenge if valid.
+ * @param {Request} req - Express request object containing email and OTP in the body.
+ * @param {Response} res - Express response object.
+ * @returns {Promise<void>}
+ */
 export const verifyOTPAndCreateCredential = async (
   req: Request,
   res: Response
